@@ -18,6 +18,15 @@ class DeliveryController
 
         $invoices = $customer ? $repo->assignedDeliveryInvoices((string) ($_SESSION['userID'] ?? ''), $customerCode) : [];
         $tripIds = $repo->assignedTrips((string) ($_SESSION['userID'] ?? ''));
+        // Some riders (UserList.SType = 'JKAS') or customers not yet classified
+        // (Customers.SellingType IS NULL) must have a Collection recorded
+        // before a delivery to them can be confirmed. When true, the Delivery
+        // Portal embeds the Collection Portal as a modal in front of "Confirm
+        // delivery".
+        $requiresCollection = $customer
+            ? $repo->deliveryRequiresCollection((string) ($_SESSION['userID'] ?? ''), $customerCode)
+            : false;
+        $categories = $requiresCollection ? $repo->categories() : [];
         // Route/sequence now spans every trip assigned to the rider, not just
         // the first one -- stops are grouped by TripID (in trip order), and
         // each stop also gets a continuous 1, 2, 3... DisplaySeq across all
@@ -46,6 +55,8 @@ class DeliveryController
             'tripIds' => $tripIds,
             'route' => $route,
             'address' => $address,
+            'requiresCollection' => $requiresCollection,
+            'categories' => $categories,
         ], ['map', 'delivery-collection']);
     }
 
@@ -115,9 +126,18 @@ class DeliveryController
             }
         }
 
+        $depositSlipUrl = null;
+        if ($transaction && $transaction['depositSlip']) {
+            $filePath = str_replace('\\', '/', ltrim((string) ($transaction['depositSlip']['FILE_PATH'] ?? ''), '/\\'));
+            if ($filePath !== '' && strpos($filePath, '..') === false) {
+                $depositSlipUrl = '../' . implode('/', array_map('rawurlencode', explode('/', $filePath)));
+            }
+        }
+
         View::render('delivery/transaction_detail', [
             'transaction' => $transaction,
             'storePhotoUrl' => $storePhotoUrl,
+            'depositSlipUrl' => $depositSlipUrl,
         ], []);
     }
 }

@@ -266,6 +266,54 @@ class DeliveryCollectionRepository
     }
 
     /**
+     * Saves a rider-uploaded deposit slip for one delivery stop (a
+     * TripID + CustomerID pair, which may cover several invoices), the same
+     * way store-delivery photos are saved: on disk under Uploads/, plus a
+     * binary copy in FileAttachment. Only allowed once every invoice
+     * assigned to that rider for that trip/customer has actually been
+     * delivered (matches the "Deposit Slip" button only being enabled once
+     * the stop's status reads "Delivered") -- re-checked here since the
+     * client-side disabled state is not itself a security boundary.
+     */
+    public function saveDepositSlip(string $userId, string $tripId, string $customerId, array $file): void
+    {
+        $stmt = $this->pdo->prepare("
+            SELECT COUNT(*) AS Total,
+                   SUM(CASE WHEN I.DeliveredDate IS NOT NULL THEN 1 ELSE 0 END) AS Delivered,
+                   SUM(CASE WHEN I.NotDeliveredReason IS NOT NULL THEN 1 ELSE 0 END) AS NotDelivered
+            FROM TripInvoice I
+            INNER JOIN TriplistAssign A ON A.TRIPID = I.TripID
+            WHERE A.USERID = :user AND I.TripID = :trip AND I.CustomerID = :customer
+        ");
+        $stmt->execute([':user' => $userId, ':trip' => $tripId, ':customer' => $customerId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+        $total = (int) ($row['Total'] ?? 0);
+        $delivered = (int) ($row['Delivered'] ?? 0);
+        $notDelivered = (int) ($row['NotDelivered'] ?? 0);
+
+        if ($total === 0) throw new RuntimeException('This delivery stop was not found or is not assigned to you.');
+        if ($notDelivered > 0 || $delivered < $total) {
+            throw new RuntimeException('A deposit slip can only be uploaded once every invoice for this stop has been delivered.');
+        }
+
+        $attachRef = 'depositslip_' . $tripId . '_' . $customerId;
+        $absolutePath = APP_ROOT . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, (string) $file['filepath']);
+        $imageData = (is_file($absolutePath) && is_readable($absolutePath)) ? file_get_contents($absolutePath) : null;
+
+        $stmt = $this->pdo->prepare("
+            INSERT INTO FileAttachment (ATTACH_REFID_DTL, FILE_NAME, FILE_PATH, FILE_TYPE, FILE_SIZE, IMAGE_ATTACH)
+            VALUES (:ref, :name, :path, :type, :size, :image)
+        ");
+        $stmt->bindParam(':ref', $attachRef, PDO::PARAM_STR);
+        $stmt->bindParam(':name', $file['filename'], PDO::PARAM_STR);
+        $stmt->bindParam(':path', $file['filepath'], PDO::PARAM_STR);
+        $stmt->bindParam(':type', $file['filetype'], PDO::PARAM_STR);
+        $stmt->bindParam(':size', $file['filesize'], PDO::PARAM_INT);
+        $stmt->bindParam(':image', $imageData, PDO::PARAM_LOB, 0, PDO::SQLSRV_ENCODING_BINARY);
+        $stmt->execute();
+    }
+
+    /**
      * Ordered delivery stops across every trip assigned to the rider: one row
      * per (trip, SortNum, customer), joined with Customers for the
      * name/address to display, and aggregated so a customer with several
@@ -343,6 +391,67 @@ class DeliveryCollectionRepository
         return (bool) $stmt->fetchColumn();
     }
 
+    /**
+     * Aging of Accounts Receivable for one customer, bucketed by how many
+     * days past due each outstanding InvoiceList row is.
+     *
+     * InvoiceList has no due-date column, so the due date is assumed to be
+     * standard Net 30 terms (InvoiceDate + 30 days). Update this if the
+     * business has a real payment-terms source to read from instead.
+     */
+    public function agingReceivables(string $customerCode): array
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT REFID, INVOICEDATE, SALESMANID, BALANCE
+             FROM InvoiceList
+             WHERE CUSTOMERID = :customer AND BALANCE > 0
+             ORDER BY INVOICEDATE, REFID"
+        );
+        $stmt->execute([':customer' => trim($customerCode)]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $today = new DateTimeImmutable('today');
+        $buckets = ['current' => 0.0, 'past30' => 0.0, 'past60' => 0.0, 'past90' => 0.0, 'past120' => 0.0, 'past150' => 0.0];
+        $items = [];
+
+        foreach ($rows as $row) {
+            $invoiceDate = new DateTimeImmutable((string) $row['INVOICEDATE']);
+            $dueDate = $invoiceDate->modify('+30 days'); // Net 30 assumption -- see method doc comment.
+            $daysPastDue = (int) floor(($today->getTimestamp() - $dueDate->getTimestamp()) / 86400);
+            $balance = (float) $row['BALANCE'];
+
+            if ($daysPastDue <= 0) {
+                $bucket = 'current';
+            } elseif ($daysPastDue <= 30) {
+                $bucket = 'past30';
+            } elseif ($daysPastDue <= 60) {
+                $bucket = 'past60';
+            } elseif ($daysPastDue <= 90) {
+                $bucket = 'past90';
+            } elseif ($daysPastDue <= 120) {
+                $bucket = 'past120';
+            } else {
+                $bucket = 'past150';
+            }
+
+            $buckets[$bucket] += $balance;
+
+            $items[] = [
+                'refid' => (string) $row['REFID'],
+                'date' => $invoiceDate->format('m/d/Y'),
+                'due_date' => $dueDate->format('m/d/Y'),
+                'salesman' => (string) $row['SALESMANID'],
+                'balance' => $balance,
+                'bucket' => $bucket,
+            ];
+        }
+
+        return [
+            'items' => $items,
+            'totals' => $buckets + ['total' => array_sum($buckets)],
+        ];
+    }
+
     public function locationLockForUser($userId): bool
     {
         $userId = trim((string) $userId);
@@ -350,6 +459,31 @@ class DeliveryCollectionRepository
         $stmt = $this->pdo->prepare('SELECT LocationLock FROM UserList WHERE USERID = :user');
         $stmt->execute([':user' => $userId]);
         return $this->locationLockCache[$userId] = (bool) $stmt->fetchColumn();
+    }
+
+    /**
+     * Whether a delivery for this rider/customer combination must have a
+     * Collection recorded before it can be confirmed. True when either:
+     *  - the rider's UserList.SType is 'JKAS', or
+     *  - the customer's Customers.SellingType is NULL/blank (not yet classified).
+     */
+    public function deliveryRequiresCollection(string $userId, string $customerCode): bool
+    {
+        $userId = trim($userId);
+        $customerCode = trim($customerCode);
+        if ($userId === '' || $customerCode === '') return false;
+
+        $stmt = $this->pdo->prepare('SELECT SType FROM UserList WHERE USERID = :user');
+        $stmt->execute([':user' => $userId]);
+        $sType = $stmt->fetchColumn();
+        $isJkas = is_string($sType) && strcasecmp(trim($sType), 'JKAS') === 0;
+
+        $stmt = $this->pdo->prepare('SELECT SellingType FROM Customers WHERE CustomerID = :customer');
+        $stmt->execute([':customer' => $customerCode]);
+        $sellingType = $stmt->fetchColumn();
+        $sellingTypeIsNull = $sellingType === false || $sellingType === null || trim((string) $sellingType) === '';
+
+        return $isJkas || $sellingTypeIsNull;
     }
 
     public function categories()
@@ -587,7 +721,19 @@ class DeliveryCollectionRepository
         $photo->execute([':ref' => 'delivery_' . $transaction['ID']]);
         $transaction['storePhoto'] = $photo->fetch(PDO::FETCH_ASSOC) ?: null;
 
+        // Deposit slip, if one was uploaded for this stop -- shared across
+        // every invoice on this Trip+Customer, see saveDepositSlip().
+        $transaction['depositSlip'] = $this->depositSlipFile((string) $transaction['TripID'], (string) $transaction['CustomerID']);
+
         return $transaction;
+    }
+
+    /** Most recently uploaded deposit slip for one delivery stop (Trip + Customer), or null if none yet -- see saveDepositSlip(). */
+    public function depositSlipFile(string $tripId, string $customerId): ?array
+    {
+        $stmt = $this->pdo->prepare("SELECT TOP 1 FILE_NAME, FILE_PATH, DATE_CREATED FROM FileAttachment WHERE ATTACH_REFID_DTL = :ref ORDER BY DATE_CREATED DESC, PK_ATTACH DESC");
+        $stmt->execute([':ref' => 'depositslip_' . $tripId . '_' . $customerId]);
+        return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
     }
 
     public function collectionAccess($customerCode, $locationLock, $latitude, $longitude)

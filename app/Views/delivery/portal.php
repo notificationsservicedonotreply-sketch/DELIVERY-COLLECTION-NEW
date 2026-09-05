@@ -17,7 +17,7 @@
         .not-delivered-reason-text{width:100%;resize:vertical;margin-bottom:6px}
         .not-delivered-reason-actions{display:flex;gap:6px;justify-content:flex-end}
         tr.row-not-delivered{opacity:.6}
-        .route-modal-content{max-width:920px;width:94vw}
+        .route-modal-content{width:85%;max-width:none}
         /* .modal-body is defined in two stylesheets with conflicting rules
            (dashboard.css sets overflow:auto, dashboard_card.css -- loaded
            later, meant for the image-attachment viewer -- sets
@@ -109,6 +109,9 @@
                                 $statusLabel = $isDone
                                     ? ($notDelivered > 0 ? "Delivered ({$notDelivered} not received)" : 'Delivered')
                                     : "{$resolved}/{$totalInv} resolved";
+                                // Deposit Slip is only for stops where every invoice was actually
+                                // delivered (not "not received"/mixed) -- i.e. statusLabel === 'Delivered'.
+                                $canUploadDepositSlip = $isDone && $notDelivered === 0;
                             ?>
                             <tr class="<?= $isCurrent ? 'route-row-current' : '' ?>">
                                 <td data-label="#"><span class="route-seq-badge"><?= htmlspecialchars((string) $stop['DisplaySeq']) ?></span></td>
@@ -116,7 +119,18 @@
                                 <td data-label="Customer"><button type="button" class="route-focus-customer" data-seq="<?= htmlspecialchars((string) $stop['DisplaySeq']) ?>"><?= htmlspecialchars((string) $stop['CustomerName']) ?> <small>(<?= htmlspecialchars((string) $stop['CustomerId']) ?>)</small></button></td>
                                 <td data-label="Address"><?= htmlspecialchars($stopAddress) ?></td>
                                 <td data-label="Status"><span class="status-pill <?= $isDone ? 'status-pill--on' : 'status-pill--off' ?>"><?= $statusLabel ?></span></td>
-                                <td data-label="Action"><a class="btn btn-blue" href="?page=Delivery-Portal&customer=<?= urlencode((string) $stop['CustomerId']) ?>"><i class="fa-solid fa-arrow-right" aria-hidden="true"></i> Open</a></td>
+                                <td data-label="Action" class="delivery-action-cell">
+                                    <a class="btn btn-blue" href="?page=Delivery-Portal&customer=<?= urlencode((string) $stop['CustomerId']) ?>"><i class="fa-solid fa-arrow-right" aria-hidden="true"></i> Open</a>
+                                    <button
+                                        type="button"
+                                        class="btn btn-gray deposit-slip-btn"
+                                        data-trip-id="<?= htmlspecialchars((string) $stop['TripId'], ENT_QUOTES) ?>"
+                                        data-customer-id="<?= htmlspecialchars((string) $stop['CustomerId'], ENT_QUOTES) ?>"
+                                        data-customer-name="<?= htmlspecialchars((string) $stop['CustomerName'], ENT_QUOTES) ?>"
+                                        <?= $canUploadDepositSlip ? '' : 'disabled' ?>
+                                        title="<?= $canUploadDepositSlip ? 'Upload the deposit slip for this delivery' : 'Available once this stop is fully delivered' ?>"
+                                    ><i class="fa-solid fa-receipt" aria-hidden="true"></i> Deposit Slip</button>
+                                </td>
                             </tr>
                             <?php endforeach; ?>
                         </tbody>
@@ -125,6 +139,44 @@
             </div>
         </div>
     </div>
+
+    <!-- Upload Deposit Slip Modal -->
+    <div class="custom-modal" id="depositSlipModal" role="dialog" aria-modal="true" aria-labelledby="depositSlipTitle">
+        <div class="custom-modal-content confirmation-modal">
+            <div class="modal-header">
+                <h2 id="depositSlipTitle"><i class="fa-solid fa-receipt" aria-hidden="true"></i> Upload Deposit Slip</h2>
+                <button class="close-btn" id="closeDepositSlip" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>Upload the deposit slip for <strong id="depositSlipCustomerLabel"></strong> (Trip <span id="depositSlipTripLabel"></span>).</p>
+                <input type="hidden" id="depositSlipTripId">
+                <input type="hidden" id="depositSlipCustomerId">
+                <div id="depositSlipExisting" class="info-box dc-hidden">
+                    <label>Already uploaded</label>
+                    <a id="depositSlipExistingLink" href="#" target="_blank" rel="noopener">
+                        <img id="depositSlipExistingImg" src="" alt="Current deposit slip" class="deposit-slip-preview">
+                    </a>
+                    <small class="form-help">Choosing a new photo below will replace this as the current deposit slip.</small>
+                </div>
+                <div class="info-box">
+                    <label for="depositSlipFile">Deposit slip photo <span class="required-star" aria-label="required">*</span></label>
+                    <input
+                        type="file"
+                        id="depositSlipFile"
+                        accept="image/jpeg,image/png,image/gif,image/webp"
+                        capture="environment"
+                    >
+                </div>
+                <div class="footer-actions">
+                    <button id="cancelDepositSlip" class="btn btn-blue"><i class="fa-solid fa-xmark" aria-hidden="true"></i> Cancel</button>
+                    <button id="confirmDepositSlip" class="btn btn-green"><i class="fa-solid fa-upload" aria-hidden="true"></i> Upload</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <style>
+        .deposit-slip-preview{max-width:220px;width:100%;border-radius:8px;border:1px solid #ead7d9;display:block;margin-top:6px}
+    </style>
     <?php endif; ?>
 
     <!-- Customer Details -->
@@ -137,6 +189,13 @@
                     ? 'Location restriction is disabled for this customer. You can now view the delivery details.'
                     : ($customerUnlocked ? 'This customer is unlocked for invoice for delivery viewing.' : '')
             ) ?>;
+            // When true, a Collection must be saved (via the embedded modal
+            // below) before any "Confirm delivery" button on this page will
+            // actually complete the delivery.
+            window.deliveryRequiresCollection = <?= $requiresCollection ? 'true' : 'false' ?>;
+            <?php if ($requiresCollection): ?>
+            window.collectionCategories = <?= json_encode($categories) ?>;
+            <?php endif; ?>
         </script>
 
         <input type="hidden" id="selectedCustomer" value="<?= htmlspecialchars($customer['code']) ?>">
@@ -245,6 +304,198 @@
             </div>
         </div>
 </div>
+
+        <?php if ($requiresCollection): ?>
+        <!-- Collection Portal Modal (required before delivery can be confirmed
+             for this rider/customer: UserList.SType = 'JKAS' or
+             Customers.SellingType IS NULL) -->
+        <div class="custom-modal" id="collectionRequiredModal" role="dialog" aria-modal="true" aria-labelledby="collectionRequiredTitle">
+            <div class="custom-modal-content route-modal-content">
+                <div class="modal-header">
+                    <h2 id="collectionRequiredTitle"><i class="fa-solid fa-hand-holding-dollar" aria-hidden="true"></i> Collection required before delivery</h2>
+                    <button class="close-btn" id="closeCollectionRequired" aria-label="Close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="notice info">This customer requires a collection to be recorded before the delivery can be confirmed.</div>
+
+                    <div id="collectionDetails">
+                        <!-- Step 1: PR Number -->
+                        <div id="collectionStep1" class="card workflow-step pr-number-card">
+                            <div class="card-title">
+                                <span class="step-number">1</span> PR number <span class="required-star" aria-label="required">*</span>
+                            </div>
+                            <div class="grid">
+                                <div class="info-box">
+                                    <input id="prNumber" class="input" required placeholder="Enter PR number" aria-describedby="prNumberHelp">
+                                    <small id="prNumberHelp" class="form-help">Required before the collection can be saved.</small>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Step 2: Invoices -->
+                        <div id="collectionStep2" class="card workflow-step">
+                            <div class="card-title">
+                                <span class="step-number">2</span> Invoices with outstanding balance
+                                <span class="required-star" aria-label="required">*</span>
+                            </div>
+                            <div class="portal-actions">
+                                <div class="customer-picker" style="position:relative;">
+                                    <label for="invoiceSearch">
+                                        Search invoice number <span class="required-star" aria-label="required">*</span>
+                                    </label>
+                                    <input id="invoiceSearch" class="input" autocomplete="off" placeholder="Type at least 2 characters">
+                                    <div id="invoiceResults" class="customer-results dc-hidden" style="position:absolute; top:100%; left:0; right:0; z-index:5000; margin-top:4px; background:#fff; border-radius:8px; box-shadow:0 8px 20px rgba(0,0,0,.15); max-height:280px; overflow-y:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; touch-action:pan-y; scroll-behavior:smooth;" role="listbox" aria-label="Invoice search results"></div>
+                                    <small id="invoiceSearchHint">Enter an invoice number, then press Enter or select Add invoice.</small>
+                                </div>
+                                <button id="addInvoice" class="btn btn-blue" type="button"><i class="fa-solid fa-search" aria-hidden="true"></i> Search invoice</button>
+                                <button id="addManualInvoiceRow" class="btn btn-blue" type="button"><i class="fa-solid fa-pen-to-square" aria-hidden="true"></i> Add Invoice Manual row</button>
+                            </div>
+                            <br />
+                            <div class="table-wrapper">
+                                <table class="table">
+                                    <thead>
+                                        <tr>
+                                            <th></th>
+                                            <th>Invoice</th>
+                                            <th>Delivery date</th>
+                                            <th>Department</th>
+                                            <th>Balance</th>
+                                            <th></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="invoiceRows">
+                                        <tr>
+                                            <td colspan="6">Search for an invoice number.</td>
+                                        </tr>
+                                    </tbody>
+                                    <tfoot>
+                                        <tr class="table-total">
+                                            <td colspan="5">Total selected invoices</td>
+                                            <td id="totalOutstandingInvoices">0.00</td>
+                                        </tr>
+                                    </tfoot>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Step 3: Collection Details -->
+                        <div id="collectionStep3" class="card workflow-step">
+                            <div class="card-title">
+                                <span class="step-number">3</span> Collection details
+                            </div>
+                            <p class="form-help">
+                                <span class="required-star">*</span> Add at least one payment amount. For Cash, bank initial, check number, and attachment are unavailable. For PDC, all fields are available.
+                            </p>
+                            <div class="table-wrapper">
+                                <table class="table">
+                                    <thead>
+                                        <tr>
+                                            <th>Payment type</th>
+                                            <th>Bank initial</th>
+                                            <th>Check no.</th>
+                                            <th>Attachment</th>
+                                            <th>Amount <span class="required-star" aria-label="required">*</span></th>
+                                            <th></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="paymentRows"></tbody>
+                                    <tfoot>
+                                        <tr class="table-total">
+                                            <td colspan="4">Total collection details</td>
+                                            <td id="totalCollectionDetails">0.00</td>
+                                            <td></td>
+                                        </tr>
+                                    </tfoot>
+                                </table>
+                            </div>
+                            <button id="addPayment" class="btn btn-blue"><i class="fa-solid fa-plus" aria-hidden="true"></i> Add payment row</button>
+                        </div>
+
+                        <!-- Step 4: Split Balance -->
+                        <div id="collectionStep4" class="card workflow-step">
+                            <div class="card-title">
+                                <span class="step-number">4</span> Split balance / attachments
+                            </div>
+                            <p class="form-help">
+                                If you enter a split amount, select its category. Categories marked <span class="required-star">*</span> need an attachment.
+                            </p>
+                            <div class="table-wrapper">
+                                <table class="table">
+                                    <thead>
+                                        <tr>
+                                            <th>Category</th>
+                                            <th>Amount</th>
+                                            <th>Reference</th>
+                                            <th>Attachment</th>
+                                            <th></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="splitRows"></tbody>
+                                    <tfoot>
+                                        <tr class="table-total">
+                                            <td>Total split balance</td>
+                                            <td id="totalSplitBalance">0.00</td>
+                                            <td colspan="3"></td>
+                                        </tr>
+                                    </tfoot>
+                                </table>
+                            </div>
+                            <button id="addSplit" class="btn btn-blue"><i class="fa-solid fa-plus" aria-hidden="true"></i> Add split row</button>
+                        </div>
+
+                        <!-- Step 5: Summary -->
+                        <div id="collectionStep5" class="card workflow-step summary-card">
+                            <div class="card-title">
+                                <span class="step-number">5</span> Summary
+                            </div>
+                            <div class="summary-row">
+                                <span>Total invoice</span>
+                                <strong id="summaryInvoice">0.00</strong>
+                            </div>
+                            <div class="summary-row">
+                                <span>Split amount</span>
+                                <strong id="summarySplit">- 0.00</strong>
+                            </div>
+                            <div class="summary-row">
+                                <span>Total collected amount</span>
+                                <strong id="summaryCollected">- 0.00</strong>
+                            </div>
+                            <div class="summary-row total">
+                                <span>Total balance</span>
+                                <strong id="summaryBalance">0.00</strong>
+                            </div>
+                            <div class="footer-actions">
+                                <button id="completeTransaction" class="btn btn-green" disabled><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i> Save collection &amp; complete delivery</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Save Confirmation Modal (shared: confirms the collection about to
+             be saved, whether from the standalone Collection Portal or from
+             this embedded pre-delivery flow) -->
+        <div class="custom-modal" id="saveConfirmModal" role="dialog" aria-modal="true" aria-labelledby="saveConfirmTitle">
+            <div class="custom-modal-content confirmation-modal">
+                <div class="modal-header">
+                    <h2 id="saveConfirmTitle"><i class="fa-solid fa-circle-check" aria-hidden="true"></i> Save collection?</h2>
+                    <button class="close-btn" id="closeSaveConfirm">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <p>Are you sure you want to save this collection?</p>
+                    <div id="saveRequirements" class="save-requirements" aria-live="polite">
+                        <!-- Dynamic content -->
+                    </div>
+                    <div class="footer-actions">
+                        <button id="cancelSave" class="btn btn-blue"><i class="fa-solid fa-xmark" aria-hidden="true"></i> No</button>
+                        <button id="confirmSave" class="btn btn-green"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i> Yes, save collection</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <?php endif; ?>
+
          <!-- Map Modal -->
         <div class="custom-modal" id="mapModal">
             <div class="custom-modal-content">

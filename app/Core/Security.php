@@ -156,14 +156,24 @@ function recordFailedLogin(PDO $pdo, string $userId, int $maxAttempts = 5, int $
 {
     if (loginAttemptsTableExists($pdo)) {
         $key = loginAttemptKey($userId);
-        $pdo->prepare('
+        // PDO's SQL Server (ODBC) driver sends every execute()-array parameter
+        // as nvarchar unless told otherwise, and DATEADD's numeric argument
+        // rejects that outright ("Argument data type nvarchar is invalid for
+        // argument 2 of dateadd function"). CAST inside the SQL is the fix
+        // that doesn't depend on how each param happens to get bound.
+        $stmt = $pdo->prepare('
             MERGE LoginAttempts AS target
             USING (SELECT :k AS AttemptKey) AS src
             ON target.AttemptKey = src.AttemptKey
             WHEN MATCHED THEN UPDATE SET FailCount = FailCount + 1, LastAttempt = GETDATE(),
-                LockedUntil = CASE WHEN FailCount + 1 >= :max THEN DATEADD(SECOND, :lock, GETDATE()) ELSE LockedUntil END
+                LockedUntil = CASE WHEN FailCount + 1 >= CAST(:max AS INT) THEN DATEADD(SECOND, CAST(:lock AS INT), GETDATE()) ELSE LockedUntil END
             WHEN NOT MATCHED THEN INSERT (AttemptKey, FailCount, LastAttempt) VALUES (:k2, 1, GETDATE());
-        ')->execute([':k' => $key, ':max' => $maxAttempts, ':lock' => $lockSeconds, ':k2' => $key]);
+        ');
+        $stmt->bindValue(':k', $key, PDO::PARAM_STR);
+        $stmt->bindValue(':k2', $key, PDO::PARAM_STR);
+        $stmt->bindValue(':max', $maxAttempts, PDO::PARAM_INT);
+        $stmt->bindValue(':lock', $lockSeconds, PDO::PARAM_INT);
+        $stmt->execute();
         return;
     }
 

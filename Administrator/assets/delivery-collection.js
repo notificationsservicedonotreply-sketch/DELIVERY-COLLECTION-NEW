@@ -12,6 +12,14 @@ let collectionInRange = false;
 let collectionAccessGranted = false;
 let locationConfirmedForDelivery = false;
 let mapFitTarget = null;
+// Delivery Portal only: once a required Collection has been saved for this
+// customer visit, further "Confirm delivery" clicks don't need to open the
+// Collection modal again.
+let collectionCompletedForDelivery = false;
+// Delivery Portal only: the "Confirm delivery" button that triggered the
+// required Collection modal, so it can be completed automatically once the
+// collection has been saved.
+let pendingDeliveryAfterCollection = null;
 
 // Resolved on demand (not once at script-parse time) so it never depends on
 // whether this script tag happens to load before or after the #moduleName
@@ -197,6 +205,54 @@ function updateCollectionRange(distance, allowed, radius) {
 function paymentRow(){const tr=document.createElement('tr');tr.innerHTML=`<td><select class="input payment-type"><option>Cash</option><option>PDC</option></select></td><td><input class="input payment-bank" disabled></td><td><input class="input payment-check" disabled></td><td><input class="payment-file" type="file" accept="image/jpeg,image/png,image/gif,image/webp" disabled></td><td><input class="input payment-amount" type="number" min="0" step=".01" value="0"></td><td><button class="btn btn-red remove-row"><i class="fa-solid fa-trash" aria-hidden="true"></i> Remove</button></td>`;tr.querySelector('.payment-type').addEventListener('change',e=>{const enabled=e.target.value==='PDC';tr.querySelectorAll('.payment-bank,.payment-check,.payment-file').forEach(field=>{field.disabled=!enabled;if(!enabled&&field.type!=='file')field.value='';});if(!enabled)tr.querySelector('.payment-file').value='';});id('paymentRows').append(tr);}
 function splitRow(){const options=(window.collectionCategories||[]).map(c=>`<option value="${c.catid}" data-required="${c.RequiresAttachment?1:0}">${c.CategoryName}${c.RequiresAttachment?' *':''}</option>`).join('');const tr=document.createElement('tr');tr.innerHTML=`<td><select class="input split-category"><option value="">Select category</option>${options}</select></td><td><input class="input split-amount" type="number" min="0" step=".01" value="0"></td><td><input class="input split-reference"></td><td><input class="split-file" type="file" accept="image/jpeg,image/png,image/gif,image/webp"></td><td><button class="btn btn-red remove-row"><i class="fa-solid fa-trash" aria-hidden="true"></i> Remove</button></td>`;id('splitRows').append(tr);}
 function money(value){return Number(value||0).toFixed(2);}
+/** Populates the Aging of Accounts Receivable modal for the current customer, from InvoiceList via the aging_receivables action. */
+async function loadAging(){
+    const tbody = id('agingRows');
+    if (!tbody) return;
+    tbody.innerHTML = '<tr><td colspan="11">Loading…</td></tr>';
+    try {
+        const data = await post('aging_receivables', { customer: id('selectedCustomer').value });
+        const items = data.items || [];
+        if (!items.length) {
+            tbody.innerHTML = '<tr><td colspan="11">No outstanding invoices for this customer.</td></tr>';
+        } else {
+            tbody.innerHTML = '';
+            items.forEach((item) => {
+                const tr = document.createElement('tr');
+                const cells = [
+                    ['Date', item.date],
+                    ['DueDate', item.due_date],
+                    ['RefID', item.refid],
+                    ['Salesman', item.salesman],
+                    ['Current', item.bucket === 'current' ? money(item.balance) : ''],
+                    ['Past 30 Days', item.bucket === 'past30' ? money(item.balance) : ''],
+                    ['Past 60 Days', item.bucket === 'past60' ? money(item.balance) : ''],
+                    ['Past 90 Days', item.bucket === 'past90' ? money(item.balance) : ''],
+                    ['Past 120 Day', item.bucket === 'past120' ? money(item.balance) : ''],
+                    ['Past 150 Day', item.bucket === 'past150' ? money(item.balance) : ''],
+                    ['Total', ''],
+                ];
+                cells.forEach(([label, value]) => {
+                    const td = document.createElement('td');
+                    td.setAttribute('data-label', label);
+                    td.textContent = value;
+                    tr.append(td);
+                });
+                tbody.append(tr);
+            });
+        }
+        const totals = data.totals || {};
+        id('agingTotalCurrent').textContent = money(totals.current);
+        id('agingTotalPast30').textContent = money(totals.past30);
+        id('agingTotalPast60').textContent = money(totals.past60);
+        id('agingTotalPast90').textContent = money(totals.past90);
+        id('agingTotalPast120').textContent = money(totals.past120);
+        id('agingTotalPast150').textContent = money(totals.past150);
+        id('agingTotalGrand').textContent = money(totals.total);
+    } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="11">${e.message}</td></tr>`;
+    }
+}
 function selectedInvoices(){return [...id('invoiceRows').querySelectorAll('tr[data-invoice]')].filter(row=>row.querySelector('.invoice-select')?.checked).map(row=>{const manual=row.dataset.manual==='1';return{invoice_no:manual?row.querySelector('.manual-invoice-number').value.trim():row.dataset.invoice,amount:manual?Number(row.querySelector('.manual-invoice-amount').value||0):Number(row.dataset.amount),manual};});}
 function refreshInvoiceTotal(){if(!id('invoiceBalance'))return;id('invoiceBalance').value=selectedInvoices().reduce((total,invoice)=>total+invoice.amount,0);summary();updateCollectionTotals();}
 let invoiceSearchTimer;
@@ -263,7 +319,51 @@ function summary(){if(!id('invoiceBalance')||!id('summaryInvoice'))return;const 
 function updateCollectionTotals(){if(!id('invoiceBalance')||!id('totalOutstandingInvoices'))return;const invoice=Number(id('invoiceBalance').value),split=[...document.querySelectorAll('.split-amount')].reduce((sum,input)=>sum+Number(input.value||0),0),paid=[...document.querySelectorAll('.payment-amount')].reduce((sum,input)=>sum+Number(input.value||0),0),balance=invoice-split-paid;id('totalOutstandingInvoices').textContent=invoice.toFixed(2);id('totalCollectionDetails').textContent=paid.toFixed(2);id('totalSplitBalance').textContent=split.toFixed(2);id('summaryBalance').style.color=balance<-.009?'#b45309':Math.abs(balance)<.01?'#198754':'#dc3545';if(collectionAccessGranted)id('completeTransaction').disabled=balance>.009;}
 function collectionRequirements(){const missing=[];if(!id('prNumber')?.value.trim())missing.push({label:'PR number',step:'collectionStep1'});const invoices=selectedInvoices();if(!invoices.length)missing.push({label:'at least one invoice',step:'collectionStep2'});else if(invoices.some(invoice=>!invoice.invoice_no||invoice.amount<=0))missing.push({label:'a valid invoice number and amount',step:'collectionStep2'});const hasPayment=[...id('paymentRows')?.querySelectorAll('.payment-amount')||[]].some(input=>Number(input.value||0)>0);if(!hasPayment)missing.push({label:'at least one payment amount',step:'collectionStep3'});[...id('splitRows')?.rows||[]].forEach(row=>{const amount=Number(row.querySelector('.split-amount')?.value||0),category=row.querySelector('.split-category');if(amount>0&&!category?.value&&!missing.some(item=>item.step==='collectionStep4'))missing.push({label:'a category for each split amount',step:'collectionStep4'});if(amount>0&&category?.value&&category.selectedOptions[0]?.dataset.required==='1'&&!row.querySelector('.split-file')?.files[0]&&!missing.some(item=>item.label==='the required split attachment'))missing.push({label:'the required split attachment',step:'collectionStep4'});});return missing;}
 function showSaveConfirmation(){const requirements=collectionRequirements(),box=id('saveRequirements'),confirm=id('confirmSave');if(box){box.innerHTML=requirements.length?`<div class="notice error"><strong>Please complete before saving:</strong><ul>${requirements.map(item=>`<li><a href="#${item.step}">${item.label}</a></li>`).join('')}</ul></div>`:'<div class="notice success">All required fields are complete. You can save this collection.</div>';}if(confirm)confirm.disabled=requirements.length>0;id('saveConfirmModal')?.classList.add('active');}
-async function save(){try{if(!collectionInRange||!collectionAccessGranted)throw Error('Open the customer collection details before saving.');const invoice=Number(id('invoiceBalance').value),invoices=selectedInvoices(),splits=[],form=new FormData(),payments=[];[...id('paymentRows').rows].forEach((r,i)=>{const type=r.querySelector('.payment-type').value,amount=Number(r.querySelector('.payment-amount').value||0),file=r.querySelector('.payment-file').files[0],attachmentReference=file?`payment_${i}`:'';if(amount>0){payments.push({type,bank:r.querySelector('.payment-bank').value.trim(),check:r.querySelector('.payment-check').value.trim(),attachment_reference:attachmentReference,amount});if(file)form.append(`payment_attachment_${attachmentReference}`,file);}});[...id('splitRows').rows].forEach((r,i)=>{const category=r.querySelector('.split-category'),amount=Number(r.querySelector('.split-amount').value||0),file=r.querySelector('.split-file').files[0];if(amount>0){if(!category.value)throw Error('Select a category for every split amount.');if(category.selectedOptions[0].dataset.required==='1'&&!file)throw Error('An attachment is required for the selected category.');const attachmentReference=file?`split_${category.value}_${i}`:'';splits.push({catid:Number(category.value),amount,reference:r.querySelector('.split-reference').value.trim(),attachment_reference:attachmentReference});if(file)form.append(`split_attachment_${attachmentReference}`,file);}});const collected=payments.reduce((s,p)=>s+p.amount,0),splitTotal=splits.reduce((s,p)=>s+p.amount,0);if(!invoices.length)throw Error('Add at least one invoice before saving.');if(!id('prNumber').value.trim())throw Error('PR number is required.');if(!payments.length)throw Error('Add a payment amount before saving.');if(invoice-collected-splitTotal>.009)throw Error('Total balance must be zero or an overpayment before saving.');form.set('customer',id('selectedCustomer').value);form.set('amount',collected);form.set('split_amount',splitTotal);form.set('payments',JSON.stringify(payments));form.set('splits',JSON.stringify(splits));form.set('invoices',JSON.stringify(invoices));form.set('pr_number',id('prNumber').value.trim());const result=await post('complete_collection',form);const next=new URL(window.location.href);next.searchParams.delete('customer');next.searchParams.set('focusCustomer','1');next.searchParams.set('savedReference',result.reference||'');window.location.href=next.toString();}catch(e){notice(e.message,'error');}}
+/** Validates and posts the collection form. Returns the saved syntax reference. Does not navigate -- callers decide what happens after a successful save. */
+async function submitCollection(){
+    if(!collectionInRange||!collectionAccessGranted)throw Error('Open the customer collection details before saving.');
+    const invoice=Number(id('invoiceBalance').value),invoices=selectedInvoices(),splits=[],form=new FormData(),payments=[];
+    [...id('paymentRows').rows].forEach((r,i)=>{const type=r.querySelector('.payment-type').value,amount=Number(r.querySelector('.payment-amount').value||0),file=r.querySelector('.payment-file').files[0],attachmentReference=file?`payment_${i}`:'';if(amount>0){payments.push({type,bank:r.querySelector('.payment-bank').value.trim(),check:r.querySelector('.payment-check').value.trim(),attachment_reference:attachmentReference,amount});if(file)form.append(`payment_attachment_${attachmentReference}`,file);}});
+    [...id('splitRows').rows].forEach((r,i)=>{const category=r.querySelector('.split-category'),amount=Number(r.querySelector('.split-amount').value||0),file=r.querySelector('.split-file').files[0];if(amount>0){if(!category.value)throw Error('Select a category for every split amount.');if(category.selectedOptions[0].dataset.required==='1'&&!file)throw Error('An attachment is required for the selected category.');const attachmentReference=file?`split_${category.value}_${i}`:'';splits.push({catid:Number(category.value),amount,reference:r.querySelector('.split-reference').value.trim(),attachment_reference:attachmentReference});if(file)form.append(`split_attachment_${attachmentReference}`,file);}});
+    const collected=payments.reduce((s,p)=>s+p.amount,0),splitTotal=splits.reduce((s,p)=>s+p.amount,0);
+    if(!invoices.length)throw Error('Add at least one invoice before saving.');
+    if(!id('prNumber').value.trim())throw Error('PR number is required.');
+    if(!payments.length)throw Error('Add a payment amount before saving.');
+    if(invoice-collected-splitTotal>.009)throw Error('Total balance must be zero or an overpayment before saving.');
+    form.set('customer',id('selectedCustomer').value);
+    form.set('amount',collected);
+    form.set('split_amount',splitTotal);
+    form.set('payments',JSON.stringify(payments));
+    form.set('splits',JSON.stringify(splits));
+    form.set('invoices',JSON.stringify(invoices));
+    form.set('pr_number',id('prNumber').value.trim());
+    const result=await post('complete_collection',form);
+    return result.reference||'';
+}
+/** Collection Portal flow: save the collection, then leave the page (as before). */
+async function save(){
+    try{
+        const reference=await submitCollection();
+        const next=new URL(window.location.href);
+        next.searchParams.delete('customer');
+        next.searchParams.set('focusCustomer','1');
+        next.searchParams.set('savedReference',reference);
+        window.location.href=next.toString();
+    }catch(e){notice(e.message,'error');}
+}
+/** Delivery Portal flow: save the required collection, then complete the delivery that was waiting on it -- without leaving the page. */
+async function saveCollectionThenDeliver(){
+    try{
+        const reference=await submitCollection();
+        id('saveConfirmModal')?.classList.remove('active');
+        id('collectionRequiredModal')?.classList.remove('active');
+        collectionCompletedForDelivery=true;
+        notice(`Collection saved (reference: ${reference}). Completing delivery…`,'success');
+        const pending=pendingDeliveryAfterCollection;
+        pendingDeliveryAfterCollection=null;
+        if(pending?.button)await deliver(pending.button);
+    }catch(e){notice(e.message,'error');}
+}
 async function deliver(button){
     try {
         if (!gps) throw Error('Waiting for GPS location.');
@@ -271,6 +371,22 @@ async function deliver(button){
         const photoInput = row?.querySelector('.store-photo-input');
         const photo = photoInput?.files?.[0];
         if (!photo) throw Error('Attach a photo of the store before confirming this delivery.');
+
+        // Some riders (UserList.SType = 'JKAS') or customers not yet
+        // classified (Customers.SellingType IS NULL) must have a Collection
+        // recorded before this delivery can be confirmed. Park this button's
+        // delivery, open the embedded Collection Portal modal, and resume
+        // here (via saveCollectionThenDeliver) once it's saved.
+        if (window.deliveryRequiresCollection && !collectionCompletedForDelivery) {
+            pendingDeliveryAfterCollection = { button };
+            collectionAccessGranted = true;
+            collectionInRange = true;
+            updateCollectionTotals();
+            id('collectionRequiredModal')?.classList.add('active');
+            notice('This customer requires a collection to be recorded before delivery can be confirmed.', 'info');
+            return;
+        }
+
         button.disabled = true;
         const form = new FormData();
         form.set('customer', id('selectedCustomer').value);
@@ -382,7 +498,7 @@ function focusRouteStop(displaySeq){
     const el=marker.getElement();
     if(el){el.classList.add('route-pin--pulse');setTimeout(()=>el.classList.remove('route-pin--pulse'),1500);}
 }
-document.addEventListener('DOMContentLoaded',()=>{initMap();id('customerSearch')?.addEventListener('input',e=>search(e.target.value.trim()));id('customerSearch')?.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();openCustomer();}});id('customerResults')?.addEventListener('dblclick',openCustomer);id('openCustomer')?.addEventListener('click',openCustomer);id('invoiceSearch')?.addEventListener('input',e=>searchInvoices(e.target.value.trim()));id('invoiceSearch')?.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();findInvoice();}});id('addInvoice')?.addEventListener('click',findInvoice);id('addManualInvoiceRow')?.addEventListener('click',manualInvoiceRow);id('confirmLocation')?.addEventListener('click',async()=>{try{if(!gps)throw Error('Waiting for GPS location.');await post('confirm_location',{customer:id('selectedCustomer').value,module:id('moduleName').value,...gps});notice('Location confirmed. You can now save.','success');id('completeTransaction').disabled=false;}catch(e){notice(e.message,'error');}});id('viewMap')?.addEventListener('click',()=>{id('mapModal').classList.add('active');setTimeout(()=>{window.deliveryCollectionMap?.invalidateSize();if(mapFitTarget)window.deliveryCollectionMap?.fitBounds(mapFitTarget,{padding:[40,40]});},150);});id('closeMap')?.addEventListener('click',()=>id('mapModal').classList.remove('active'));id('viewCollectionDetails')?.addEventListener('click',async()=>{try{if(!collectionInRange||!gps)throw Error('Customer is out of range. Move within 5 m of the customer.');const result=await post('collection_access',{customer:id('selectedCustomer').value,...gps});id('collectionDetails').classList.remove('dc-hidden');collectionAccessGranted=true;updateCollectionTotals();notice(result.access.reason,'success');}catch(e){notice(e.message,'error');}});id('viewDeliveryDetails')?.addEventListener('click',async()=>{try{if(!collectionInRange||!gps)throw Error('Customer is out of range. Move within the allowed radius of the customer.');await post('confirm_location',{customer:id('selectedCustomer').value,module:'delivery',...gps});id('deliveryDetails').classList.remove('dc-hidden');locationConfirmedForDelivery=true;updateDeliveryButtonStates();notice('Location confirmed. Attach a store photo, then confirm each invoice one at a time.','success');}catch(e){notice(e.message,'error');}});document.addEventListener('change',e=>{if(e.target.classList.contains('store-photo-input'))updateDeliveryButtonStates();});id('addPayment')?.addEventListener('click',paymentRow);id('addSplit')?.addEventListener('click',splitRow);document.addEventListener('input',()=>{summary();updateCollectionTotals();});document.addEventListener('click',e=>{if(e.target.classList.contains('remove-row')||e.target.classList.contains('remove-invoice-row')){e.target.closest('tr').remove();refreshInvoiceTotal();}});if(id('paymentRows')){paymentRow();splitRow();summary();updateCollectionTotals();}id('completeTransaction')?.addEventListener('click',()=>id('moduleName').value==='collection'?showSaveConfirmation():deliver());['closeSaveConfirm','cancelSave'].forEach(key=>id(key)?.addEventListener('click',()=>id('saveConfirmModal').classList.remove('active')));id('saveRequirements')?.addEventListener('click',e=>{if(e.target.closest('a'))id('saveConfirmModal').classList.remove('active');});id('confirmSave')?.addEventListener('click',save);});
+document.addEventListener('DOMContentLoaded',()=>{initMap();id('customerSearch')?.addEventListener('input',e=>search(e.target.value.trim()));id('customerSearch')?.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();openCustomer();}});id('customerResults')?.addEventListener('dblclick',openCustomer);id('openCustomer')?.addEventListener('click',openCustomer);id('invoiceSearch')?.addEventListener('input',e=>searchInvoices(e.target.value.trim()));id('invoiceSearch')?.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();findInvoice();}});id('addInvoice')?.addEventListener('click',findInvoice);id('addManualInvoiceRow')?.addEventListener('click',manualInvoiceRow);id('confirmLocation')?.addEventListener('click',async()=>{try{if(!gps)throw Error('Waiting for GPS location.');await post('confirm_location',{customer:id('selectedCustomer').value,module:id('moduleName').value,...gps});notice('Location confirmed. You can now save.','success');id('completeTransaction').disabled=false;}catch(e){notice(e.message,'error');}});id('viewMap')?.addEventListener('click',()=>{id('mapModal').classList.add('active');setTimeout(()=>{window.deliveryCollectionMap?.invalidateSize();if(mapFitTarget)window.deliveryCollectionMap?.fitBounds(mapFitTarget,{padding:[40,40]});},150);});id('closeMap')?.addEventListener('click',()=>id('mapModal').classList.remove('active'));id('viewAging')?.addEventListener('click',()=>{id('agingModal')?.classList.add('active');loadAging();});id('closeAging')?.addEventListener('click',()=>id('agingModal').classList.remove('active'));id('viewCollectionDetails')?.addEventListener('click',async()=>{try{if(!collectionInRange||!gps)throw Error('Customer is out of range. Move within 5 m of the customer.');const result=await post('collection_access',{customer:id('selectedCustomer').value,...gps});id('collectionDetails').classList.remove('dc-hidden');collectionAccessGranted=true;updateCollectionTotals();notice(result.access.reason,'success');}catch(e){notice(e.message,'error');}});id('viewDeliveryDetails')?.addEventListener('click',async()=>{try{if(!collectionInRange||!gps)throw Error('Customer is out of range. Move within the allowed radius of the customer.');await post('confirm_location',{customer:id('selectedCustomer').value,module:'delivery',...gps});id('deliveryDetails').classList.remove('dc-hidden');locationConfirmedForDelivery=true;updateDeliveryButtonStates();notice('Location confirmed. Attach a store photo, then confirm each invoice one at a time.','success');}catch(e){notice(e.message,'error');}});document.addEventListener('change',e=>{if(e.target.classList.contains('store-photo-input'))updateDeliveryButtonStates();});id('addPayment')?.addEventListener('click',paymentRow);id('addSplit')?.addEventListener('click',splitRow);document.addEventListener('input',()=>{summary();updateCollectionTotals();});document.addEventListener('click',e=>{if(e.target.classList.contains('remove-row')||e.target.classList.contains('remove-invoice-row')){e.target.closest('tr').remove();refreshInvoiceTotal();}});if(id('paymentRows')){paymentRow();splitRow();summary();updateCollectionTotals();}id('completeTransaction')?.addEventListener('click',showSaveConfirmation);['closeSaveConfirm','cancelSave'].forEach(key=>id(key)?.addEventListener('click',()=>id('saveConfirmModal').classList.remove('active')));id('saveRequirements')?.addEventListener('click',e=>{if(e.target.closest('a'))id('saveConfirmModal').classList.remove('active');});id('confirmSave')?.addEventListener('click',()=>pendingDeliveryAfterCollection?saveCollectionThenDeliver():save());id('closeCollectionRequired')?.addEventListener('click',()=>{id('collectionRequiredModal').classList.remove('active');pendingDeliveryAfterCollection=null;});});
 document.addEventListener('DOMContentLoaded',()=>{
     const params=new URLSearchParams(window.location.search),reference=params.get('savedReference');
     if(reference)notice(`Collection saved successfully. Syntax reference: ${reference}`,'success');
@@ -420,6 +536,50 @@ document.addEventListener('DOMContentLoaded',()=>{
             e.preventDefault();
             focusRouteStop(link.dataset.seq);
         });
+    });
+
+    // Deposit Slip upload (Delivery Portal route table): opens a small modal
+    // scoped to one Trip + Customer stop; the button itself is only enabled
+    // server-side (see delivery/portal.php) once that stop reads "Delivered".
+    document.querySelectorAll('.deposit-slip-btn').forEach((button) => {
+        button.addEventListener('click', async () => {
+            id('depositSlipTripId').value = button.dataset.tripId;
+            id('depositSlipCustomerId').value = button.dataset.customerId;
+            id('depositSlipTripLabel').textContent = button.dataset.tripId;
+            id('depositSlipCustomerLabel').textContent = button.dataset.customerName;
+            id('depositSlipFile').value = '';
+            id('depositSlipExisting')?.classList.add('dc-hidden');
+            id('depositSlipModal')?.classList.add('active');
+            // Show what's already on file (if anything) so the rider can view it before deciding whether to replace it.
+            try {
+                const info = await post('deposit_slip_info', { trip_id: button.dataset.tripId, customer: button.dataset.customerId });
+                if (info.exists && info.url) {
+                    id('depositSlipExistingLink').href = info.url;
+                    id('depositSlipExistingImg').src = info.url;
+                    id('depositSlipExisting')?.classList.remove('dc-hidden');
+                }
+            } catch (e) { /* Non-fatal: the upload form still works without the preview. */ }
+        });
+    });
+    ['closeDepositSlip', 'cancelDepositSlip'].forEach((key) => id(key)?.addEventListener('click', () => id('depositSlipModal').classList.remove('active')));
+    id('confirmDepositSlip')?.addEventListener('click', async () => {
+        const button = id('confirmDepositSlip');
+        try {
+            const file = id('depositSlipFile').files?.[0];
+            if (!file) throw Error('Attach a photo of the deposit slip before uploading.');
+            button.disabled = true;
+            const form = new FormData();
+            form.set('trip_id', id('depositSlipTripId').value);
+            form.set('customer', id('depositSlipCustomerId').value);
+            form.set('deposit_slip', file);
+            const result = await post('upload_deposit_slip', form);
+            id('depositSlipModal')?.classList.remove('active');
+            notice(result.message, 'success');
+        } catch (error) {
+            notice(error.message, 'error');
+        } finally {
+            button.disabled = false;
+        }
     });
 });
 })();

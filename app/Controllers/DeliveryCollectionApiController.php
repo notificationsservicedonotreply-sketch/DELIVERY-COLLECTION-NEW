@@ -34,8 +34,17 @@ class DeliveryCollectionApiController
                 case 'collection_invoices':
                     $this->collectionInvoices($repository);
                     break;
+                case 'aging_receivables':
+                    $this->agingReceivables($repository);
+                    break;
                 case 'complete_delivery':
                     $this->completeDelivery($repository, $userId);
+                    break;
+                case 'upload_deposit_slip':
+                    $this->uploadDepositSlip($repository, $userId);
+                    break;
+                case 'deposit_slip_info':
+                    $this->depositSlipInfo($repository);
                     break;
                 case 'not_delivered':
                     $this->markNotDelivered($repository, $userId);
@@ -131,6 +140,38 @@ class DeliveryCollectionApiController
         echo json_encode(['success' => true, 'message' => 'Recorded as not delivered.', 'remaining_for_customer' => $result['remaining']]);
     }
 
+    /** Uploads a rider-supplied deposit slip for one delivery stop (Trip + Customer), enabled client-side once every invoice there is Delivered -- re-checked here in the repository. */
+    private function uploadDepositSlip(DeliveryCollectionRepository $repository, string $userId): void
+    {
+        $tripId = trim((string) ($_POST['trip_id'] ?? ''));
+        $customer = trim((string) ($_POST['customer'] ?? ''));
+        if ($tripId === '' || $customer === '') throw new RuntimeException('Invalid deposit slip upload.');
+        $file = $this->uploadedImage('deposit_slip', 'Delivery');
+        if ($file === null) throw new RuntimeException('A photo of the deposit slip is required.');
+        $repository->saveDepositSlip($userId, $tripId, $customer, $file);
+        echo json_encode(['success' => true, 'message' => 'Deposit slip uploaded.']);
+    }
+
+    /** Whether a deposit slip already exists for this stop, and a viewable URL for it, so the upload modal can show/replace it instead of assuming there's nothing there yet. */
+    private function depositSlipInfo(DeliveryCollectionRepository $repository): void
+    {
+        $tripId = trim((string) ($_POST['trip_id'] ?? ''));
+        $customer = trim((string) ($_POST['customer'] ?? ''));
+        if ($tripId === '' || $customer === '') throw new RuntimeException('Invalid request.');
+        $file = $repository->depositSlipFile($tripId, $customer);
+        echo json_encode(['success' => true, 'exists' => $file !== null, 'url' => $this->safeFileUrl($file['FILE_PATH'] ?? null)]);
+    }
+
+    /** Same path-safety handling used for store-photo/deposit-slip URLs elsewhere: normalize separators, reject anything with a traversal segment, and URL-encode each path segment individually. */
+    private function safeFileUrl(?string $filePath): ?string
+    {
+        if ($filePath === null) return null;
+        $filePath = str_replace('\\', '/', ltrim($filePath, '/\\'));
+        if ($filePath === '' || strpos($filePath, '..') !== false) return null;
+        return '../' . implode('/', array_map('rawurlencode', explode('/', $filePath)));
+    }
+
+
     private function completeCollection(DeliveryCollectionRepository $repository, string $userId): void
     {
         $customer = trim((string) ($_POST['customer'] ?? ''));
@@ -170,6 +211,14 @@ class DeliveryCollectionApiController
         $dbName = (string) ($_SESSION['DATABASENAME'] ?? '');
         $items = $alreadyCollected ? [] : $repository->searchCollectionInvoices($customer, $query, $dbName);
         echo json_encode(['success' => true, 'items' => $items, 'already_collected' => $alreadyCollected]);
+    }
+
+    private function agingReceivables(DeliveryCollectionRepository $repository): void
+    {
+        $customer = trim((string) ($_POST['customer'] ?? ''));
+        if ($customer === '') throw new RuntimeException('Select a customer first.');
+        $data = $repository->agingReceivables($customer);
+        echo json_encode(['success' => true] + $data);
     }
 
     private function uploadedAttachments(): array

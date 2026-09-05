@@ -49,6 +49,17 @@
                     <p>No store photo was attached to this delivery.</p>
                 <?php endif; ?>
             </section>
+
+            <section class="detail-section">
+                <div class="detail-section-title"><span>Deposit slip</span></div>
+                <?php if ($depositSlipUrl): ?>
+                    <a href="<?= htmlspecialchars($depositSlipUrl) ?>" target="_blank" rel="noopener">
+                        <img src="<?= htmlspecialchars($depositSlipUrl) ?>" alt="Deposit slip" class="store-photo-preview">
+                    </a>
+                <?php else: ?>
+                    <p>No deposit slip has been uploaded for this stop yet.</p>
+                <?php endif; ?>
+            </section>
         <?php endif; ?>
     </div>
 </main>

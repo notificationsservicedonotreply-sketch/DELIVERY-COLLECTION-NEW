@@ -103,5 +103,16 @@
     .portal-actions > .btn { width:100%; max-width:100%; }
     .customer-picker .input, .customer-picker select, .input, textarea { width:100%; min-width:0; max-width:100%; box-sizing:border-box; }
     .table-wrapper { max-width:100%; }
+    /* The rule above (width:100%; min-width:0) is meant for standalone form
+       fields like the customer/invoice search boxes, but it also caught
+       every input/select inside the Collection Portal's payment and split
+       tables -- there, with no minimum width, browsers collapse each field
+       down to almost nothing since the table column has no text driving its
+       size. These tables already scroll horizontally (.table-wrapper), so
+       give their fields back a usable width instead of shrinking to fit. */
+    .table-wrapper .input, .table-wrapper select { width:auto; min-width:130px; }
+    .payment-amount, .split-amount, .amount-input, .manual-invoice-amount { min-width:100px; }
+    .payment-type, .split-category { min-width:120px; }
+    .payment-file, .split-file { min-width:170px; }
     #prNumber { margin-bottom:12px; }
 }
