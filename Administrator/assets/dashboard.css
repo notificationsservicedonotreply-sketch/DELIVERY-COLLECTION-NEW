@@ -1,0 +1,778 @@
+/* ================= RESET ================= */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: Segoe UI, Arial;
+}
+
+body {
+    background: #f4f6f9;
+}
+
+
+/* ================= OVERLAY ================= */
+.overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.4);
+    display: none;
+    z-index: 2500;
+}
+
+.overlay.active {
+    display: block;
+}
+
+/* ================= SIDEBAR ================= */
+.sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 250px;
+    height: 100%;
+    background: #198754;
+    color: #fff;
+    padding: 20px;
+    transition: .3s;
+    z-index: 3000;
+}
+
+.sidebar h2 {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 20px;
+    font-size: 20px;
+}
+
+.menu {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.menu a {
+    color: #fff;
+    text-decoration: none;
+    padding: 12px;
+    border-radius: 8px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.menu a:hover {
+    background: rgba(255,255,255,0.15);
+}
+
+/* ================= MAIN ================= */
+.main {
+    margin-left: 250px;
+    padding: 20px;
+}
+
+/* ================= TOPBAR ================= */
+.topbar {
+    background: #fff;
+    padding: 15px 20px;
+    border-radius: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+
+.left-top {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+/* ================= MENU TOGGLE ================= */
+.menu-toggle {
+    display: none;
+    background: #198754;
+    color: #fff;
+    border: none;
+    padding: 10px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 18px;
+}
+
+/* ================= NOTIFICATION ================= */
+.notification {
+    position: relative;
+    cursor: pointer;
+}
+
+.notification i {
+    font-size: 24px;
+    color: #198754;
+}
+
+.notification-count {
+    position: absolute;
+    top: -6px;
+    right: -10px;
+    background: red;
+    color: #fff;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 11px;
+    animation: pulse 1.2s infinite;
+}
+
+/* ================= DROPDOWN ================= */
+.dropdown {
+    position: absolute;
+    right: 0;
+    top: 40px;
+    width: 300px;
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    display: none;
+    z-index: 4000;
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+.dropdown.active {
+    display: block;
+}
+
+.dropdown h4 {
+    background: #198754;
+    color: #fff;
+    padding: 10px;
+    font-size: 14px;
+}
+
+.dropdown-item {
+    padding: 10px;
+    border-bottom: 1px solid #eee;
+    font-size: 13px;
+}
+
+
+/* ================= CARDS ================= */
+.card{
+    background:#fff;
+    border-radius:14px;
+    padding:18px;
+    margin-bottom:18px;
+    box-shadow:0 2px 8px rgba(0,0,0,.05);
+}
+
+.card-title{
+    font-size:16px;
+    font-weight:700;
+    margin-bottom:15px;
+    color:#198754;
+}
+
+/* ================= GRID ================= */
+.grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(250px,1fr));
+    gap:15px;
+}
+
+.info-box{
+    background:#f8fafc;
+    border:1px solid #e4e7ec;
+    border-radius:12px;
+    padding:14px;
+}
+
+.info-box label{
+    display:block;
+    font-size:12px;
+    color:#777;
+    margin-bottom:5px;
+}
+
+.info-box .value{
+    font-size:15px;
+    font-weight:600;
+}
+
+/* ================= INPUT ================= */
+.input{
+    width:100%;
+    padding:10px;
+    border:1px solid #ccc;
+    border-radius:8px;
+    outline:none;
+}
+
+.input:focus{
+    border-color:#198754;
+}
+
+/* ================= BUTTONS ================= */
+.btn{
+    border:none;
+    border-radius:8px;
+    padding:9px 14px;
+    cursor:pointer;
+    font-size:13px;
+    font-weight:600;
+    transition:.2s;
+}
+
+.btn:hover{
+    transform:translateY(-1px);
+}
+
+.btn-green{ background:#198754; color:#fff; }
+.btn-red{ background:#dc3545; color:#fff; }
+.btn-orange{ background:#fd7e14; color:#fff; }
+.btn-blue{ background:#0d6efd; color:#fff; }
+.btn-gray{ background:#6c757d; color:#fff; }
+
+.btn:disabled{
+    opacity:.45;
+    cursor:not-allowed;
+    transform:none;
+}
+
+
+.btn-group-inline{
+    display:flex;
+    gap:6px;
+    flex-wrap:nowrap; /* keep in one line */
+    align-items:center;
+}
+
+.btn-group-inline .btn{
+    white-space:nowrap;
+    font-size:12px;
+    padding:6px 10px;
+}
+
+
+
+/* ================= TABLE ================= */
+
+.table-wrapper{
+    width:100%;
+    overflow-x:auto;
+    overflow-y:auto;
+    max-height:70vh;
+}
+.table{
+    width:100%;
+    border-collapse:collapse;
+    table-layout:auto;
+}
+
+.table thead th{
+    background:#198754;
+    color:#fff;
+    padding:12px 10px;
+    font-size:13px;
+    text-align:center;
+    position:sticky;
+    top:0;
+    z-index:100;
+    white-space:nowrap;
+}
+
+.table td{
+    padding:10px;
+    border-bottom:1px solid #eee;
+    font-size:13px;
+    text-align:center;
+    vertical-align:middle;
+    white-space:nowrap;
+}
+
+.table tr:nth-child(even){
+    background:#fafafa;
+}
+
+.table tr:hover{
+    background:#f1f8f4;
+}
+
+/* ================= DYNAMIC TABLE (sortable + searchable + responsive) =====
+   Opt-in: add class="dynamic-table" to any <table class="table">, and
+   data-label="Column Name" to each <td> so the mobile card layout below has
+   a label to show. Sorting/searching is wired up by dynamic-table.js. */
+.dynamic-table-toolbar{
+    display:flex;
+    gap:10px;
+    align-items:center;
+    flex-wrap:wrap;
+    margin-bottom:10px;
+}
+.dynamic-table-search{
+    flex:1 1 220px;
+}
+.dynamic-table-count{
+    font-size:12px;
+    color:#888;
+    white-space:nowrap;
+}
+.dynamic-table th[data-sortable]{
+    cursor:pointer;
+    user-select:none;
+    position:relative;
+    padding-right:20px;
+}
+.dynamic-table th[data-sortable]::after{
+    content:'\21C5';
+    position:absolute;
+    right:6px;
+    opacity:.45;
+    font-size:11px;
+}
+.dynamic-table th.dt-sort-asc::after{ content:'\2191'; opacity:1; }
+.dynamic-table th.dt-sort-desc::after{ content:'\2193'; opacity:1; }
+.dynamic-table tr.dt-hidden{ display:none !important; }
+
+@media (max-width:720px){
+    .dynamic-table thead{ display:none; }
+    .dynamic-table,
+    .dynamic-table tbody,
+    .dynamic-table tr,
+    .dynamic-table td{ display:block; width:100%; }
+    .dynamic-table tr{
+        padding:10px 12px;
+        margin-bottom:10px;
+        border:1px solid #f0dfe1;
+        border-radius:12px;
+        background:#fff;
+    }
+    .dynamic-table tr:nth-child(even){ background:#fff; }
+    .dynamic-table td{
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        gap:14px;
+        padding:8px 0;
+        border:0;
+        white-space:normal;
+        text-align:right;
+    }
+    .dynamic-table td[data-label]::before{
+        content:attr(data-label);
+        color:#8a8a8a;
+        font-size:11px;
+        font-weight:800;
+        text-align:left;
+        text-transform:uppercase;
+        letter-spacing:.04em;
+        margin-right:10px;
+    }
+    /* A row with a colspan is an empty-state / message row, not a data row
+       -- render it as plain text, not a label/value pair. */
+    .dynamic-table td[colspan]{ display:block; text-align:center; }
+}
+/* ================= BALANCE ================= */
+.balance-grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(160px,1fr));
+    gap:12px;
+}
+
+.balance-box{
+    background:#f8fafc;
+    border-radius:12px;
+    padding:15px;
+    text-align:center;
+    border:1px solid #e7eaee;
+}
+
+.balance-box h3{
+    font-size:13px;
+    color:#777;
+    margin-bottom:8px;
+}
+
+.balance-box p{
+    font-size:20px;
+    font-weight:700;
+    color:#198754;
+}
+
+
+.dept-link{
+    color:#007bff;
+    cursor: pointer;
+    font-weight:600;
+    transition:0.2s;
+    display:inline-block;
+}
+
+.dept-link:hover{
+    color:#0056b3;
+    text-decoration:underline;
+}
+
+
+/* OPTIONAL: highlight whole row on hover */
+tr:hover{
+    background:#f5f9ff;
+    transition:0.2s;
+}
+
+/* OPTIONAL: make it feel clickable */
+tr{
+    transition:0.2s;
+}
+
+/* ================= TEXTAREA ================= */
+textarea{
+    width:100%;
+    min-height:120px;
+    border-radius:12px;
+    border:1px solid #ccc;
+    padding:12px;
+    resize:vertical;
+    outline:none;
+}
+
+textarea:focus{
+    border-color:#198754;
+}
+
+/* ================= FOOTER ================= */
+.footer-actions{
+    display:flex;
+    flex-wrap:wrap;
+    gap:10px;
+    margin-top:15px;
+}
+
+/* ================= BADGE ================= */
+.badge{
+    display:inline-block;
+    padding:5px 10px;
+    border-radius:20px;
+    background:#198754;
+    color:#fff;
+    font-size:12px;
+    font-weight:600;
+}
+
+
+
+
+/* ================= DASHBOARD ================= */
+.dashboard-card{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    width:100%;
+}
+
+.dashboard-left{
+    display:flex;
+    flex-direction:column;
+}
+
+/* NOTIFICATION */
+.notification{
+    position:relative;
+    cursor:pointer;
+
+    /* THIS FIXES IT TO RIGHT */
+    margin-left:auto;
+
+    display:flex;
+    align-items:center;
+    justify-content:flex-end;
+}
+
+.notification i{
+    font-size:28px;
+    color:#198754;
+}
+
+/* COUNT */
+.notification-count{
+    position:absolute;
+    top:-6px;
+    right:-10px;
+    background:red;
+    color:#fff;
+    width:20px;
+    height:20px;
+    border-radius:50%;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:11px;
+    font-weight:bold;
+}
+
+/* DROPDOWN */
+.dropdown{
+    position:absolute;
+    top:40px;
+    right:0;
+    width:300px;
+    background:#fff;
+    border-radius:10px;
+    box-shadow:0 4px 15px rgba(0,0,0,0.15);
+    display:none;
+    z-index:9999;
+    overflow:hidden;
+}
+
+.dropdown.active{
+    display:block;
+}
+
+
+
+
+/* =====================================
+   MODAL
+===================================== */
+
+.custom-modal{
+    position:fixed;
+    left:0;
+    top:0;
+    width:100%;
+    height:100%;
+    background:rgba(0,0,0,0.45);
+    display:none;
+    justify-content:center;
+    align-items:center;
+    z-index:99999;
+    padding:15px;
+}
+
+.custom-modal.active{
+    display:flex;
+}
+
+.custom-modal-content{
+    background:#fff;
+    width:100%;
+    max-width:950px;
+    border-radius:14px;
+    overflow:hidden;
+    animation:modalShow .2s ease;
+}
+
+@keyframes modalShow{
+    from{
+        transform:scale(.9);
+        opacity:0;
+    }
+    to{
+        transform:scale(1);
+        opacity:1;
+    }
+}
+
+/* HEADER */
+.modal-header{
+    background:#198754;
+    color:#fff;
+    padding:15px 20px;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+}
+
+.modal-header h2{
+    font-size:20px;
+}
+
+/* CLOSE */
+.close-btn{
+    background:none;
+    border:none;
+    color:#fff;
+    font-size:28px;
+    cursor:pointer;
+}
+
+/* BODY */
+.modal-body{
+    padding:20px;
+    max-height:70vh;
+    overflow:auto;
+}
+
+
+
+.error_notification {
+    background: #ffdddd;
+    color: #a10000;
+    padding: 10px;
+    border-radius: 8px;
+    margin-bottom: 15px;
+    font-size: 13px;
+    border: 1px solid #ff5c5c;
+}
+
+.success_notification {
+    background: #d4edda;
+    color: #155724;
+    padding: 10px;
+    border-radius: 8px;
+    margin-bottom: 15px;
+    font-size: 13px;
+    border: 1px solid #28a745;
+}
+
+
+/* ================= SUB MENU ================= */
+.has-submenu {
+    display: flex;
+    flex-direction: column;
+}
+
+.submenu-toggle {
+    justify-content: space-between;
+    cursor: pointer;
+}
+
+.submenu-arrow {
+    margin-left: auto;
+    font-size: 12px;
+    transition: transform .3s;
+}
+
+.has-submenu.open .submenu-arrow {
+    transform: rotate(180deg);
+}
+
+.submenu {
+    display: none;
+    flex-direction: column;
+    gap: 6px;
+    padding-left: 20px;
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height .3s ease;
+}
+
+.has-submenu.open .submenu {
+    display: flex;
+    max-height: 500px; /* enough room for however many items */
+}
+
+.submenu a {
+    color: #fff;
+    text-decoration: none;
+    padding: 10px 12px;
+    border-radius: 8px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    font-size: 0.9em;
+    opacity: 0.9;
+}
+
+.submenu a:hover {
+    background: rgba(255,255,255,0.15);
+    opacity: 1;
+}
+
+
+
+/* ================= ANIMATION ================= */
+@keyframes pulse {
+    0% {
+        transform: scale(1);
+    }
+    50% {
+        transform: scale(1.2);
+    }
+    100% {
+        transform: scale(1);
+    }
+}
+
+/* ================= MOBILE & TABLET PORTRAIT ================= */
+@media screen and (max-width: 1024px) {
+
+    /* Hide sidebar by default */
+    .sidebar{
+        left: -260px;
+        transition: 0.3s;
+    }
+
+    /* Show sidebar when active */
+    .sidebar.active{
+        left: 0;
+    }
+
+    /* Show toggle button */
+    .menu-toggle{
+        display: block;
+    }
+
+    /* Full width content */
+    .main{
+        margin-left: 0;
+        width: 100%;
+    }
+}
+
+
+/* ================= TABLET LANDSCAPE ================= */
+@media screen 
+and (min-width: 768px) 
+and (max-width: 1366px) 
+and (orientation: landscape) {
+
+    /* Hide sidebar */
+    .sidebar{
+        left: -260px;
+    }
+
+    /* Show only when active */
+    .sidebar.active{
+        left: 0;
+    }
+
+    /* Show hamburger toggle */
+    .menu-toggle{
+        display: block;
+    }
+
+    /* Main content full width */
+    .main{
+        margin-left: 0;
+        width: 100%;
+    }
+}
+
+
+/* ================= DESKTOP ================= */
+@media screen and (min-width: 1367px) {
+
+    /* Always show sidebar */
+    .sidebar{
+        left: 0;
+    }
+
+    /* Hide toggle button */
+    .menu-toggle{
+        display: none;
+    }
+
+    /* Main content spacing */
+    .main{
+        margin-left: 260px;
+    }
+}
+

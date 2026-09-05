@@ -1,0 +1,62 @@
+/* MARS red design system: loaded last so every primary area shares one finish. */
+:root { --mars-red:#a71927; --mars-red-dark:#71111b; --mars-red-bright:#d63d49; --mars-rose:#fff5f5; --mars-line:#efd9dc; --mars-ink:#2b1b1e; --mars-muted:#78666a; }
+body { background:linear-gradient(135deg,#fff8f8 0%,#f6f0f1 100%); color:var(--mars-ink); }
+.sidebar { background:linear-gradient(180deg,var(--mars-red-dark),var(--mars-red) 58%,#861521); box-shadow:8px 0 30px rgba(78,10,18,.16); }
+.sidebar h2 { padding-bottom:17px; border-bottom:1px solid rgba(255,255,255,.16); letter-spacing:.01em; }
+.menu a { border:1px solid transparent; transition:background .2s ease,transform .2s ease,border-color .2s ease; }
+.menu a:hover { background:rgba(255,255,255,.15); border-color:rgba(255,255,255,.18); transform:translateX(3px); }
+.topbar,.card { border:1px solid rgba(167,25,39,.09); box-shadow:0 10px 28px rgba(73,15,24,.07); }
+.card { border-radius:18px; }
+.card-title,.portal-hero h1,.transaction-hero h1,.transaction-detail-heading h1 { color:var(--mars-red-dark); }
+.dashboard-left h1 { color:var(--mars-red-dark); }.dashboard-left small { color:var(--mars-muted); font-weight:600; }
+.btn,.menu-toggle { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:40px; border-radius:9px; font-weight:700; text-decoration:none; }
+.btn i { line-height:1; }
+.menu-toggle,.btn-green { background:linear-gradient(135deg,var(--mars-red),var(--mars-red-bright)); color:#fff; }
+.btn-green:hover,.menu-toggle:hover { background:linear-gradient(135deg,var(--mars-red-dark),var(--mars-red)); }
+.btn-blue { background:#fff1f2; color:var(--mars-red-dark); border:1px solid #e8bfc5; }
+.btn-blue:hover { background:#ffe4e7; }
+.btn-red { background:#fff; color:#971b27; border:1px solid #e8bfc5; }
+.btn-red:hover { background:#fff1f2; }
+.input:focus,textarea:focus { border-color:var(--mars-red); box-shadow:0 0 0 3px rgba(167,25,39,.12); }
+.table thead th,.transaction-table thead th,.detail-table th { background:linear-gradient(100deg,var(--mars-red-dark),var(--mars-red)); }
+.table tr:hover,.table tr:nth-child(even):hover { background:#fff2f3; }
+.badge,.step-number { background:var(--mars-red); }
+.notification i { color:var(--mars-red); }.notification-count { background:var(--mars-red-bright); }
+.dropdown h4,.modal-header { background:linear-gradient(100deg,var(--mars-red-dark),var(--mars-red)); color:#fff; border-bottom:0; }
+.modal-header > h2 { color:#fff !important; margin:0; }.modal-header > h2 i { color:#fff !important; }.modal-header .close-btn { color:#fff !important; }.modal-header .close-btn:hover { color:#fff !important; opacity:.8; }
+.custom-modal-content { border:1px solid var(--mars-line); border-radius:14px; box-shadow:0 22px 55px rgba(45,11,17,.28); }
+.customer-card,.workflow-step:target { border-top-color:var(--mars-red); }
+.customer-card .info-box,.pr-number-card .info-box,.detail-field { background:var(--mars-rose); border-color:var(--mars-line); }
+.customer-card .value,.metric strong,.transaction-amount,.detail-field strong,.detail-section-title { color:var(--mars-red-dark); }
+.customer-search-card #customerSearch,.customer-search-card #customerSearch:focus { border-color:var(--mars-red); box-shadow:0 0 0 2px rgba(167,25,39,.12); }
+.customer-result strong,.suggestion-code { color:var(--mars-red); }.customer-result:hover,.customer-result:focus,.suggestion-item:hover { background:#fff0f1; }
+.transaction-filters,.transaction-detail-card { border-top-color:#dca5ac; }.scope-options { color:var(--mars-red-dark); }
+.confirmation-badge.confirmed,.portal-status { background:#fde9eb; color:#8c1621; }.notice.success { background:#e8f5ee; color:#146c43; border:1px solid #b9dfc5; }
+.table-total td { background:#fff0f1; color:#8c1621; border-top-color:#e4b5bb; }
+#backToTop { background:linear-gradient(135deg,var(--mars-red),var(--mars-red-bright)); }
+.tabs::-webkit-scrollbar-thumb { background:var(--mars-red); }.tab-btn:hover { background:#fff0f1; color:var(--mars-red-dark); }.tab-btn.active { background:linear-gradient(135deg,var(--mars-red-dark),var(--mars-red)); box-shadow:0 6px 18px rgba(167,25,39,.3); }.tab-btn.active::after { background:var(--mars-red); }.all-dept-link { color:var(--mars-red); }.all-dept-link:hover { background:#fff0f1; color:var(--mars-red-dark); }
+@media (max-width:1024px) { .sidebar { box-shadow:10px 0 35px rgba(73,15,24,.25); } }
+@media (max-width:640px) {
+    body { overflow-x:hidden; }
+   /* .sidebar { width:280px; padding:16px 14px; }*/
+    .sidebar h2 { font-size:17px; margin-bottom:14px; }
+    .menu { gap:6px; }.menu a { min-height:45px; padding:11px; font-size:14px; }
+    .main,.user-management-page { width:100%; margin-left:0; padding:12px; }
+    .card { padding:14px; margin-bottom:12px; border-radius:15px; }
+    .dashboard-card { gap:10px; align-items:flex-start; }.dashboard-left h1 { font-size:20px; }
+    .notification { margin-top:4px; }.dropdown { width:min(290px,calc(100vw - 32px)); }
+    .portal-hero { gap:11px; }.portal-hero h1,.transaction-hero h1,.transaction-detail-heading h1 { font-size:21px; }
+    .portal-status { width:100%; overflow-wrap:anywhere; line-height:1.45; }
+    .customer-picker,.portal-actions .input { min-width:0; width:100%; }
+    .portal-actions { align-items:stretch; }.portal-actions > .btn { width:100%; min-height:44px; }
+    .transaction-filter-grid { display:grid; grid-template-columns:1fr; gap:10px; }.filter-field .input { min-width:0; }
+    .scope-options { flex-wrap:wrap; gap:9px 13px; }.check-option { min-height:38px; }
+    .transaction-table-header { align-items:flex-start; flex-direction:column; }
+    .table-wrapper { max-height:none; border-radius:10px; }.table { min-width:650px; }
+    .transaction-table { min-width:760px; }.transaction-view { white-space:nowrap; }
+    .detail-header-grid { grid-template-columns:1fr; }.detail-wide { grid-column:auto; }
+    .transaction-detail-heading { align-items:flex-start; flex-direction:column; }.transaction-back { width:100%; text-align:center; }
+    .custom-modal { padding:8px; }.custom-modal-content { width:100%; max-height:calc(100vh - 16px); }
+    .modal-body { padding:14px; }.dc-map { height:290px; }
+    .info-boxex { padding:18px; }.info-boxex h1 { font-size:32px; }
+}

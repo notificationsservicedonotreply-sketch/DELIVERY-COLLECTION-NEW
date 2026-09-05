@@ -1,0 +1,269 @@
+/* ================= TABS ================= */
+
+.tabs{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    margin:20px 0;
+    padding:10px;
+    background:#fff;
+    border-radius:16px;
+    box-shadow:0 4px 15px rgba(0,0,0,.08);
+
+    overflow-x:auto;
+    overflow-y:hidden;
+    white-space:nowrap;
+    -webkit-overflow-scrolling:touch;
+
+    scrollbar-width:thin;
+}
+
+/* Chrome scrollbar */
+.tabs::-webkit-scrollbar{
+    height:8px;
+}
+
+.tabs::-webkit-scrollbar-track{
+    background:#e5e7eb;
+    border-radius:10px;
+}
+
+.tabs::-webkit-scrollbar-thumb{
+    background:#2563eb;
+    border-radius:10px;
+}
+
+/* ================= TAB BUTTON ================= */
+
+.tab-btn{
+    flex:0 0 auto;
+    position:relative;
+
+    border:none;
+    outline:none;
+    cursor:pointer;
+
+    padding:12px 20px;
+    border-radius:12px;
+
+    background:#f5f7fb;
+    color:#4b5563;
+
+    font-size:14px;
+    font-weight:600;
+
+    transition:.3s;
+    white-space:nowrap;
+    min-width:120px;
+}
+
+.tab-btn i{
+    margin-right:6px;
+}
+
+.tab-btn:hover{
+    background:#e8eefc;
+    color:#1e40af;
+    transform:translateY(-2px);
+}
+
+.tab-btn.active{
+    background:linear-gradient(135deg,#2563eb,#1d4ed8);
+    color:#fff;
+    box-shadow:0 6px 18px rgba(37,99,235,.35);
+}
+
+.tab-btn.active::after{
+    content:'';
+    position:absolute;
+    left:50%;
+    bottom:-6px;
+    transform:translateX(-50%) rotate(45deg);
+    width:10px;
+    height:10px;
+    background:#1d4ed8;
+}
+
+
+.all-dept-link{
+    display:inline-block;
+    color:#2563eb;
+    font-weight:600;
+    cursor:pointer;
+    padding:4px 8px;
+    border-radius:6px;
+    transition:.25s;
+}
+
+.all-dept-link:hover{
+    background:#eff6ff;
+    color:#1d4ed8;
+    text-decoration:none;
+}
+
+.all-dept-link:active{
+    transform:scale(.98);
+}
+
+
+/* ================= SWITCH ================= */
+
+.switch{
+    position:relative;
+    display:inline-block;
+    width:65px;
+    height:34px;
+    margin-top:10px;
+}
+
+.switch input{
+    opacity:0;
+    width:0;
+    height:0;
+}
+
+.slider{
+    position:absolute;
+    cursor:default;
+    top:0;
+    left:0;
+    right:0;
+    bottom:0;
+    background:#dc3545;
+    transition:.4s;
+    border-radius:34px;
+    box-shadow:0 3px 10px rgba(0,0,0,.15);
+}
+
+.slider:before{
+    position:absolute;
+    content:"";
+    height:26px;
+    width:26px;
+    left:4px;
+    bottom:4px;
+    background:white;
+    transition:.4s;
+    border-radius:50%;
+}
+
+.switch input:checked + .slider{
+    background:#198754;
+}
+
+.switch input:checked + .slider:before{
+    transform:translateX(30px);
+}
+
+
+/* ================= BACK TO TOP ================= */
+
+#backToTop{
+    position:fixed;
+    bottom:25px;
+    right:25px;
+    width:60px;
+    height:60px;
+    border:none;
+    border-radius:50%;
+    background:#19a7e0; 
+    color:#fff;
+    font-size:24px;
+    cursor:pointer;
+    box-shadow:0 4px 15px rgba(0,0,0,.25);
+    z-index:9999;
+
+    opacity:0;
+    visibility:hidden;
+    transition:.3s;
+}
+
+#backToTop:hover{
+    transform:translateY(-3px);
+    box-shadow:0 8px 20px rgba(0,0,0,.35);
+}
+
+#backToTop.show{
+    opacity:1;
+    visibility:visible;
+}
+
+/* ================= AUTOCOMPLETE ================= */
+
+.autocomplete-wrapper{
+    position:relative;
+    width:100%;
+}
+
+.suggestions{
+    position:absolute;
+    top:100%;
+    left:0;
+    right:0;
+    background:#fff;
+    border:1px solid #ddd;
+    border-top:none;
+    border-radius:0 0 10px 10px;
+    max-height:300px;
+    overflow-y:auto;
+    z-index:9999;
+    display:none;
+    box-shadow:0 5px 15px rgba(0,0,0,.10);
+}
+
+.suggestion-item{
+    padding:12px;
+    cursor:pointer;
+    border-bottom:1px solid #f1f1f1;
+    transition:.2s;
+}
+
+.suggestion-item:hover{
+    background:#e9f7ef;
+}
+
+.suggestion-code{
+    font-weight:bold;
+    color:#198754;
+}
+
+.suggestion-name{
+    color:#555;
+    font-size:13px;
+}
+
+
+/* ================= LABEL ================= */
+
+.status-label{
+    margin-top:12px;
+    font-size:13px;
+    font-weight:600;
+    color:#555;
+}
+
+/* ================= MOBILE ================= */
+
+@media (max-width:768px){
+    .tabs{
+        padding:8px;
+        gap:8px;
+        border-radius:12px;
+    }
+
+    .tab-btn{
+        min-width:100px;
+        padding:10px 14px;
+        font-size:13px;
+    }
+}
+
+/* ================= SMALL PHONES ================= */
+
+@media (max-width:480px){
+    .tab-btn{
+        min-width:90px;
+        padding:9px 12px;
+        font-size:12px;
+    }
+}

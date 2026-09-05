@@ -1,0 +1,90 @@
+/* User management: a compact, responsive red-accent workspace. */
+.user-management-page {
+    --um-red: #b51f2a;
+    --um-red-dark: #7f1420;
+    --um-coral: #ef5b54;
+    --um-ink: #2a1b1d;
+    --um-muted: #78686b;
+}
+
+.user-management-card {
+    border: 1px solid #f1dfe1;
+    box-shadow: 0 14px 36px rgba(96, 20, 30, .09);
+}
+
+.user-management-heading {
+    align-items: center;
+    margin-bottom: 22px;
+}
+
+.user-management-intro { display: flex; align-items: center; gap: 13px; }
+.user-management-icon {
+    width: 46px; height: 46px; display: grid; place-items: center; flex: 0 0 auto;
+    color: #fff; border-radius: 14px; background: linear-gradient(135deg, var(--um-red), var(--um-coral));
+    box-shadow: 0 8px 18px rgba(181, 31, 42, .24);
+}
+.user-management-page .card-title { color: var(--um-ink); margin-bottom: 3px; font-size: 20px; }
+.user-management-intro small { color: var(--um-muted); font-size: 13px; }
+.user-management-page .btn:hover { box-shadow: 0 7px 15px rgba(126, 20, 31, .15); }
+.add-user-button { display: inline-flex; gap: 8px; align-items: center; }
+
+.user-management-table thead th { background: linear-gradient(100deg, var(--um-red-dark), var(--um-red)); }
+.user-management-table tbody tr { transition: background .18s ease; }
+.user-management-table tbody tr:hover { background: #fff7f7; }
+.user-management-table td strong { color: var(--um-ink); }
+.user-action-buttons { display: inline-flex; gap: 7px; justify-content: center; }
+.user-action-buttons .btn { display: inline-flex; align-items: center; gap: 6px; }
+.status-pill {
+    display: inline-flex; align-items: center; border-radius: 999px; padding: 4px 9px;
+    font-size: 11px; font-weight: 700;
+}
+.status-pill--on { background: #ffe5e6; color: #a11b27; }
+.status-pill--off { background: #f2f1f1; color: #71676a; }
+
+.user-modal-content { max-width: 720px; border: 1px solid #f0dfe0; }
+.user-modal-content .modal-header h2 { display: flex; align-items: center; gap: 9px; }
+.user-form-grid label { color: var(--um-ink); font-size: 13px; font-weight: 700; }
+.user-form-grid label small { display: block; margin: 4px 0 6px; color: var(--um-muted); font-size: 11px; font-weight: 500; }
+.user-management-page .input:focus, .user-modal-content .input:focus { border-color: var(--um-red); box-shadow: 0 0 0 3px rgba(181, 31, 42, .12); }
+.access-section { margin-top: 22px; padding-top: 20px; border-top: 1px solid #f0e4e5; }
+.section-heading { color: var(--um-ink); font-weight: 800; }
+.section-heading i { color: var(--um-red); margin-right: 7px; }
+.access-section p { margin: 5px 0 13px; color: var(--um-muted); font-size: 13px; }
+.permission-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.permission-option {
+    display: flex; gap: 9px; align-items: center; min-height: 44px; padding: 10px 12px;
+    border: 1px solid #eadbdd; border-radius: 10px; color: var(--um-ink); cursor: pointer;
+    transition: border-color .18s ease, background .18s ease;
+}
+.permission-option:hover { border-color: #d6767d; background: #fff8f8; }
+.permission-option input { accent-color: var(--um-red); width: 16px; height: 16px; }
+.permission-option--admin { background: #fff8f8; border-color: #e5b5ba; }
+.permission-option--admin small { display: block; margin-top: 2px; color: var(--um-muted); font-size: 10px; font-weight: 500; }
+
+@media (max-width: 700px) {
+    .user-management-page { padding: 12px; }
+    .user-management-card { padding: 14px; }
+    .user-management-heading { align-items: stretch; }
+    .user-management-intro { align-items: flex-start; }
+    .add-user-button { width: 100%; justify-content: center; }
+    .user-management-table thead { display: none; }
+    .user-management-table, .user-management-table tbody, .user-management-table tr, .user-management-table td { display: block; width: 100%; }
+    .user-management-table tr { padding: 10px 12px; margin-bottom: 10px; border: 1px solid #f0dfe1; border-radius: 12px; background: #fff; }
+    .user-management-table td { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 8px 0; border: 0; white-space: normal; text-align: right; }
+    .user-management-table td::before { content: attr(data-label); color: var(--um-muted); font-size: 11px; font-weight: 800; text-align: left; text-transform: uppercase; letter-spacing: .04em; }
+    .user-management-table td:nth-child(5)::before { content: 'Delivery'; }
+    .user-management-table td:nth-child(6)::before { content: 'Collection'; }
+    .user-management-table td:nth-child(7)::before { content: 'Transactions'; }
+    .user-management-table td:nth-child(8)::before { content: 'Transaction administrator'; }
+    .user-action-buttons { width: auto; }
+    .user-modal-content { max-height: calc(100vh - 24px); }
+    .permission-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 420px) {
+    .user-management-icon { width: 40px; height: 40px; border-radius: 12px; }
+    .user-management-page .card-title { font-size: 17px; }
+    .user-action-buttons .btn span { display: none; }
+    .user-action-buttons .btn { padding: 8px 10px; }
+    .footer-actions { gap: 8px; }
+}
