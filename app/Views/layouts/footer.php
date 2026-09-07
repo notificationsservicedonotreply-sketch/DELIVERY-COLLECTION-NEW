@@ -13,6 +13,7 @@ $scriptMap = [
     'customer-tab' => ['assets/CustomerTab.js'],
     'dashboard' => ['assets/dashboard.js'],
     'user-management' => ['assets/user-management.js'],
+    'trip-list-assign' => ['assets/trip-list-assign.js'],
     'attachment-viewer' => ['assets/attachment-viewer.js'],
 ];
 $toLoad = ['assets/jquery-3.7.1.min.js'];

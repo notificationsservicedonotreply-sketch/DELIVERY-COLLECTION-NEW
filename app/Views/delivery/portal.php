@@ -7,8 +7,21 @@
         #routeMap{height:45vh;min-height:280px;border-radius:10px;overflow:hidden;border:1px solid #ead7d9}
         .route-pin{background:#a71927;color:#fff;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:13px;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.35)}
         .route-pin--done{background:#198754}
+        .route-pin--suggested{background:#0d6efd;box-shadow:0 0 0 4px rgba(13,110,253,.35),0 2px 6px rgba(0,0,0,.35);animation:route-pin-suggested-pulse 1.6s ease-in-out infinite}
+        @keyframes route-pin-suggested-pulse{0%,100%{box-shadow:0 0 0 4px rgba(13,110,253,.35),0 2px 6px rgba(0,0,0,.35)}50%{box-shadow:0 0 0 9px rgba(13,110,253,.12),0 2px 6px rgba(0,0,0,.35)}}
+        .route-suggestion{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-top:12px;padding:12px 14px;border:1px solid #bcd6ff;border-radius:10px;background:#eef5ff;color:#0a3d91}
+        .route-suggestion-text{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13.5px}
+        .route-suggestion-text i{color:#0d6efd}
+        .route-suggestion-actions{display:flex;gap:8px;flex-wrap:wrap}
+        .route-nearest-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;background:#eef5ff;color:#0d6efd;font-weight:700;font-size:11px;white-space:nowrap}
+        @media (max-width:720px){
+            .route-suggestion{flex-direction:column;align-items:stretch;text-align:center}
+            .route-suggestion-actions{justify-content:center}
+        }
         .route-pin--pulse{animation:route-pin-pulse 1.5s ease-out 1}
         @keyframes route-pin-pulse{0%{box-shadow:0 0 0 0 rgba(167,25,39,.65)}70%{box-shadow:0 0 0 16px rgba(167,25,39,0)}100%{box-shadow:0 0 0 0 rgba(167,25,39,0)}}
+        .rider-location-marker{width:20px;height:20px;border-radius:50%;background:#0d6efd;border:3px solid #fff;box-shadow:0 0 0 4px rgba(13,110,253,.35),0 2px 8px rgba(0,0,0,.4);animation:rider-location-pulse 2s ease-in-out infinite}
+        @keyframes rider-location-pulse{0%,100%{box-shadow:0 0 0 4px rgba(13,110,253,.35),0 2px 8px rgba(0,0,0,.4)}50%{box-shadow:0 0 0 10px rgba(13,110,253,.15),0 2px 8px rgba(0,0,0,.4)}}
         .route-focus-customer{background:none;border:none;padding:0;color:#0d6efd;font-weight:600;text-align:left;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;font-size:inherit}
         .route-focus-customer:hover{color:#0958c9}
         .route-seq-badge{display:inline-block;min-width:22px;padding:2px 6px;border-radius:999px;background:#a71927;color:#fff;font-weight:bold;text-align:center;font-size:12px}
@@ -80,7 +93,21 @@
             <div class="modal-body">
                 <div class="route-map-wrap">
                     <div id="routeMap"></div>
-                    <small class="form-help">Numbers show visiting order across all your assigned trips. The line follows actual driving directions between stops.</small>
+                    <small class="form-help">Numbers show visiting order across all your assigned trips. The line follows actual driving directions between stops. The pulsing blue dot is your current location, connected to the suggested next stop.</small>
+                </div>
+                <div id="routeSuggestion" class="route-suggestion dc-hidden">
+                    <div class="route-suggestion-text">
+                        <i class="fa-solid fa-location-arrow" aria-hidden="true"></i>
+                        <span id="routeSuggestionText"></span>
+                    </div>
+                    <div class="route-suggestion-actions">
+                        <button type="button" id="routeSuggestionFocus" class="btn btn-blue">
+                            <i class="fa-solid fa-crosshairs" aria-hidden="true"></i> Focus
+                        </button>
+                        <button type="button" id="routeSuggestionRefresh" class="btn btn-gray">
+                            <i class="fa-solid fa-rotate" aria-hidden="true"></i> Refresh
+                        </button>
+                    </div>
                 </div>
                 <br />
                 <div class="table-wrapper">
@@ -113,8 +140,8 @@
                                 // delivered (not "not received"/mixed) -- i.e. statusLabel === 'Delivered'.
                                 $canUploadDepositSlip = $isDone && $notDelivered === 0;
                             ?>
-                            <tr class="<?= $isCurrent ? 'route-row-current' : '' ?>">
-                                <td data-label="#"><span class="route-seq-badge"><?= htmlspecialchars((string) $stop['DisplaySeq']) ?></span></td>
+                            <tr class="<?= $isCurrent ? 'route-row-current' : '' ?>" data-seq="<?= htmlspecialchars((string) $stop['DisplaySeq']) ?>" data-done="<?= $isDone ? '1' : '0' ?>">
+                                <td data-label="#"><span class="route-seq-badge"><?= htmlspecialchars((string) $stop['DisplaySeq']) ?></span> <span class="route-nearest-badge dc-hidden"><i class="fa-solid fa-location-arrow" aria-hidden="true"></i> Nearest</span></td>
                                 <td data-label="Trip"><?= htmlspecialchars((string) $stop['TripId']) ?></td>
                                 <td data-label="Customer"><button type="button" class="route-focus-customer" data-seq="<?= htmlspecialchars((string) $stop['DisplaySeq']) ?>"><?= htmlspecialchars((string) $stop['CustomerName']) ?> <small>(<?= htmlspecialchars((string) $stop['CustomerId']) ?>)</small></button></td>
                                 <td data-label="Address"><?= htmlspecialchars($stopAddress) ?></td>

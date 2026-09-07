@@ -11,7 +11,7 @@ class DeliveryController
         $repo = new DeliveryCollectionRepository($pdo);
         $customerCode = trim($_GET['customer'] ?? '');
         $customer = $customerCode ? $repo->customer($customerCode) : null;
-        $radius = $repo->radius();
+        $radius = $repo->deliveryRadius();
         $locationLock = $repo->locationLockForUser((string) ($_SESSION['userID'] ?? ''));
         $customerUnlocked = $customer ? $repo->customerUnlocked($customerCode) : false;
         $collectionLocationRequired = $customer ? $repo->collectionLocationRequired($customerCode, $locationLock) : true;
@@ -57,7 +57,7 @@ class DeliveryController
             'address' => $address,
             'requiresCollection' => $requiresCollection,
             'categories' => $categories,
-        ], ['map', 'delivery-collection']);
+        ], ['map', 'delivery-collection', 'status-pill']);
     }
 
     public function transactions(): void

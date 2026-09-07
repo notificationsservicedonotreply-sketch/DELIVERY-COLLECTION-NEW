@@ -305,25 +305,84 @@ body {
     background:#f1f8f4;
 }
 
-/* ================= DYNAMIC TABLE (sortable + searchable + responsive) =====
+/* ================= DYNAMIC TABLE (sortable + searchable + paginated +
+   responsive) ================================================================
    Opt-in: add class="dynamic-table" to any <table class="table">, and
    data-label="Column Name" to each <td> so the mobile card layout below has
-   a label to show. Sorting/searching is wired up by dynamic-table.js. */
-.dynamic-table-toolbar{
+   a label to show. Sorting/searching/paging is wired up by dynamic-table.js.
+   - Top toolbar: "Show [N] entries" page-size picker + search box.
+   - Bottom bar: "Showing X to Y of Z entries" count + Previous/Next pager.
+   Both bars are skipped for tiny tables (<=5 rows) or data-no-search. */
+.dynamic-table-toolbar,
+.dynamic-table-bottombar{
     display:flex;
     gap:10px;
     align-items:center;
     flex-wrap:wrap;
-    margin-bottom:10px;
+    justify-content:space-between;
+}
+.dynamic-table-toolbar{ margin-bottom:12px; }
+.dynamic-table-bottombar{ margin-top:12px; }
+
+.dynamic-table-pagesize{
+    display:flex;
+    align-items:center;
+    gap:6px;
+    font-size:13px;
+    color:#666;
+    white-space:nowrap;
+}
+.dynamic-table-pagesize-select{
+    width:auto;
+    padding:6px 26px 6px 10px;
 }
 .dynamic-table-search{
     flex:1 1 220px;
 }
 .dynamic-table-count{
-    font-size:12px;
-    color:#888;
+    font-size:13px;
+    color:#777;
     white-space:nowrap;
 }
+
+.dynamic-table-pagination{
+    display:flex;
+    gap:4px;
+    align-items:center;
+    flex-wrap:wrap;
+}
+.dt-page-btn{
+    min-width:34px;
+    height:34px;
+    padding:0 10px;
+    border:1px solid #e0d3d5;
+    background:#fff;
+    color:#555;
+    border-radius:8px;
+    cursor:pointer;
+    font-size:13px;
+    font-weight:600;
+    transition:.15s;
+}
+.dt-page-btn:hover:not(:disabled){
+    background:#fff5f5;
+    border-color:var(--mars-line,#e8bfc5);
+}
+.dt-page-btn:disabled{
+    opacity:.4;
+    cursor:not-allowed;
+}
+.dt-page-btn--active{
+    background:var(--mars-red,#a71927);
+    border-color:var(--mars-red,#a71927);
+    color:#fff;
+}
+.dt-page-ellipsis{
+    padding:0 4px;
+    color:#999;
+    font-size:13px;
+}
+
 .dynamic-table th[data-sortable]{
     cursor:pointer;
     user-select:none;
@@ -339,34 +398,52 @@ body {
 }
 .dynamic-table th.dt-sort-asc::after{ content:'\2191'; opacity:1; }
 .dynamic-table th.dt-sort-desc::after{ content:'\2193'; opacity:1; }
-.dynamic-table tr.dt-hidden{ display:none !important; }
+.dynamic-table tr.dt-search-hidden,
+.dynamic-table tr.dt-page-hidden{ display:none !important; }
 
 @media (max-width:720px){
+    /* Safety net: nothing inside a dynamic-table row should ever be able to
+       force the page (or this card) wider than the screen. Long addresses,
+       long customer names, or a button/pill that doesn't want to wrap used
+       to push the whole row sideways, so on some phones the details were
+       only visible by scrolling the page/card horizontally -- everything
+       below either wraps or is clipped instead. */
     .dynamic-table thead{ display:none; }
     .dynamic-table,
     .dynamic-table tbody,
     .dynamic-table tr,
-    .dynamic-table td{ display:block; width:100%; }
+    .dynamic-table td{ display:block; width:100%; max-width:100%; box-sizing:border-box; }
+    .dynamic-table{ overflow:hidden; }
     .dynamic-table tr{
         padding:10px 12px;
         margin-bottom:10px;
         border:1px solid #f0dfe1;
         border-radius:12px;
         background:#fff;
+        overflow:hidden;
     }
     .dynamic-table tr:nth-child(even){ background:#fff; }
     .dynamic-table td{
         display:flex;
-        align-items:center;
+        flex-wrap:wrap;
+        align-items:flex-start;
         justify-content:space-between;
-        gap:14px;
+        gap:4px 14px;
         padding:8px 0;
         border:0;
         white-space:normal;
+        overflow-wrap:anywhere;
+        word-break:break-word;
         text-align:right;
     }
+    /* The label (::before) and the value need to be able to shrink and wrap
+       independently -- without min-width:0 a flex item's default min-width
+       is its own unwrapped content size, which is exactly what let a long
+       address or an unbroken button label push the row wider than the
+       screen instead of wrapping. */
     .dynamic-table td[data-label]::before{
         content:attr(data-label);
+        flex:0 0 auto;
         color:#8a8a8a;
         font-size:11px;
         font-weight:800;
@@ -375,9 +452,51 @@ body {
         letter-spacing:.04em;
         margin-right:10px;
     }
+    .dynamic-table td > *{
+        min-width:0;
+        max-width:100%;
+        white-space:normal;
+        overflow-wrap:anywhere;
+        word-break:break-word;
+    }
+    .dynamic-table td{ min-width:0; }
+    .dynamic-table td > *:only-child{ flex:1 1 auto; text-align:right; }
+
     /* A row with a colspan is an empty-state / message row, not a data row
        -- render it as plain text, not a label/value pair. */
     .dynamic-table td[colspan]{ display:block; text-align:center; }
+
+    /* Action cells (e.g. delivery-action-cell) stack their contents in a
+       column on mobile already; center that column and give the injected
+       "ACTION" label its own centered line above the stacked buttons.
+       min-width:0 overrides delivery-action-cell's 180px desktop minimum,
+       which had no room to breathe on narrow phones. */
+    .dynamic-table td[data-label="Action"]{
+        align-items:stretch;
+        flex-direction:column;
+        flex-wrap:nowrap;
+        text-align:center;
+        min-width:0;
+    }
+    .dynamic-table td[data-label="Action"]::before{
+        text-align:center;
+        margin:0 0 6px;
+    }
+    .dynamic-table td[data-label="Action"] > *{
+        max-width:100%;
+        text-align:center;
+    }
+
+    /* Toolbar/bottom bar stack full-width on mobile instead of trying to
+       fit "Show N entries" and the search box side by side. */
+    .dynamic-table-toolbar,
+    .dynamic-table-bottombar{
+        flex-direction:column;
+        align-items:stretch;
+    }
+    .dynamic-table-search{ flex:1 1 auto; }
+    .dynamic-table-count{ text-align:center; }
+    .dynamic-table-pagination{ justify-content:center; }
 }
 /* ================= BALANCE ================= */
 .balance-grid{
@@ -774,5 +893,44 @@ and (orientation: landscape) {
     .main{
         margin-left: 260px;
     }
+}
+
+/* =====================================
+   BACK TO TOP
+   The button (#backToTop) is loaded via footer.php on every page, so this
+   must be global too -- it used to live only in CustomerTab.css, which is
+   no longer loaded on any page (verified dead code otherwise: no view uses
+   any of its other selectors), so this button lost its fixed circular
+   styling and rendered as an unstyled inline button wherever it happened
+   to fall in the page instead of pinned to the bottom-right corner.
+===================================== */
+#backToTop{
+    position:fixed;
+    bottom:25px;
+    right:25px;
+    width:60px;
+    height:60px;
+    border:none;
+    border-radius:50%;
+    background:#19a7e0;
+    color:#fff;
+    font-size:24px;
+    cursor:pointer;
+    box-shadow:0 4px 15px rgba(0,0,0,.25);
+    z-index:9999;
+
+    opacity:0;
+    visibility:hidden;
+    transition:.3s;
+}
+
+#backToTop:hover{
+    transform:translateY(-3px);
+    box-shadow:0 8px 20px rgba(0,0,0,.35);
+}
+
+#backToTop.show{
+    opacity:1;
+    visibility:visible;
 }
 

@@ -15,15 +15,15 @@
         <div class="transaction-filter-grid">
             <?php if ($canManageAllTransactions): ?>
             <div class="scope-options" role="radiogroup" aria-label="Search by">
-                <label><input type="radio" name="scope" value="rider" <?= $scope === 'rider' ? 'checked' : '' ?>> Rider</label>
+                <label><input type="radio" name="scope" value="rider" <?= $scope === 'rider' ? 'checked' : '' ?>> Salesman</label>
                 <label><input type="radio" name="scope" value="customer" <?= $scope === 'customer' ? 'checked' : '' ?>> Customer</label>
                 <label><input type="radio" name="scope" value="all" <?= $scope === 'all' ? 'checked' : '' ?>> All</label>
             </div>
             <?php else: ?>
-            <div class="transaction-scope-note"><i class="fa-solid fa-user-shield"></i> Showing only your records (Rider ID: <?= htmlspecialchars($search) ?>).</div>
+            <div class="transaction-scope-note"><i class="fa-solid fa-user-shield"></i> Showing only your records (Salesman ID: <?= htmlspecialchars($search) ?>).</div>
             <?php endif; ?>
             <?php if ($canManageAllTransactions): ?>
-            <label class="filter-field"><span id="searchLabel"><?= ucfirst($scope) ?></span><input class="input" name="search" value="<?= htmlspecialchars($search) ?>" placeholder="Search rider or customer"></label>
+            <label class="filter-field"><span id="searchLabel"><?= ucfirst($scope) ?></span><input class="input" name="search" value="<?= htmlspecialchars($search) ?>" placeholder="Search Salesman or customer"></label>
             <?php endif; ?>
             <label class="filter-field">From<input class="input" type="date" name="from" value="<?= htmlspecialchars($fromDate) ?>"></label>
             <label class="filter-field">To<input class="input" type="date" name="to" value="<?= htmlspecialchars($toDate) ?>"></label>
@@ -36,7 +36,7 @@
         <div class="transaction-table-header"><div class="card-title">Transactions</div><?php if ($hasSearched): ?><span><?= count($transactions) ?> record(s)</span><?php endif; ?></div>
         <div class="table-wrapper transaction-table-wrapper">
             <table class="table transaction-table dynamic-table">
-                <thead><tr><th data-sortable>Trip ID</th><th data-sortable>Invoice No.</th><th data-sortable>Customer name</th><th data-sortable>Rider</th><th data-sortable>Date</th><th data-sortable>Status</th><th></th></tr></thead>
+                <thead><tr><th data-sortable>Trip ID</th><th data-sortable>Invoice No.</th><th data-sortable>Customer name</th><th data-sortable>Salesman</th><th data-sortable>Date</th><th data-sortable>Status</th><th></th></tr></thead>
                 <tbody>
                 <?php if (!$hasSearched): ?>
                     <tr><td colspan="7" class="transaction-empty">Choose any filters you need, then click Search to load transactions.</td></tr>

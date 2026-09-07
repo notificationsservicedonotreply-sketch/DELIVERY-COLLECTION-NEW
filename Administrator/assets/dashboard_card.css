@@ -262,8 +262,19 @@
     padding: 0 8px;
 }
 
-/* Modal Body */
-.modal-body {
+/* Modal Body -- scoped to the Attachment Viewer specifically (see
+   .attachment-modal on that modal's outer <div>). This modal's body hosts
+   an image-zoom/pan stage that manages its own overflow, which is why this
+   uses overflow:hidden + a fixed min-height instead of the normal
+   scrollable .modal-body from dashboard.css. Every other modal (Upload
+   Deposit Slip, Add/Edit User, Assign Trip, confirmation dialogs, etc.)
+   must keep dashboard.css's .modal-body (padding + max-height +
+   overflow:auto) as the ONLY rule that applies to it -- this used to be a
+   bare ".modal-body" selector here too, which (loading after dashboard.css)
+   silently overrode that scrolling for every modal on the site, clipping
+   off any content -- most visibly a modal's Cancel/Upload buttons -- that
+   didn't fit within a fixed height, with no way to scroll to reveal it. */
+.attachment-modal .modal-body {
     flex: 1;
     position: relative;
     overflow: hidden;
@@ -324,7 +335,7 @@
         font-size: 15px;
     }
     
-    .modal-body {
+    .attachment-modal .modal-body {
         min-height: 300px;
     }
 }

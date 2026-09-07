@@ -20,6 +20,7 @@
         document.getElementById('canManageTransactions').checked = Boolean(Number(user?.CanManageTransactions));
         document.getElementById('canDeliveryTransactions').checked = Boolean(Number(user?.CanDeliveryTransactions));
         document.getElementById('canManageDeliveryTransactions').checked = Boolean(Number(user?.CanManageDeliveryTransactions));
+        document.getElementById('canTriplistAssign').checked = Boolean(Number(user?.CanTriplistAssign));
         document.getElementById('locationLock').checked = Boolean(Number(user?.LocationLock));
         document.getElementById('userModalTitle').innerHTML = user
             ? '<i class="fa-solid fa-user-pen" aria-hidden="true"></i> Edit user'

@@ -82,7 +82,16 @@ $isHttps = (
 );
 
 $host = strtolower($_SERVER['HTTP_HOST'] ?? '');
-$host = preg_replace('/:\d+$/', '', $host);
+// Strip a trailing ":port" -- but carefully, since a bare/unbracketed IPv6
+// address (like the loopback address "::1") also contains colons, and a
+// naive `:\d+$` strip would wrongly chop it down to just ":" (matching the
+// trailing ":1"). Bracketed IPv6 host headers ("[::1]:8080") are stripped
+// via the bracket itself; a bare IPv6 host with no port is left untouched.
+if (preg_match('/^\[(.+)\](?::\d+)?$/', $host, $ipv6Match)) {
+    $host = $ipv6Match[1];
+} elseif (substr_count($host, ':') <= 1) {
+    $host = preg_replace('/:\d+$/', '', $host);
+}
 
 $isLocalhost = in_array($host, [
     'localhost',
@@ -90,26 +99,56 @@ $isLocalhost = in_array($host, [
     '::1'
 ], true);
 
-// Tailscale IPv4 range
-$isTailscale = false;
+// Any private/LAN address (RFC 1918 IPv4: 10.0.0.0/8, 172.16.0.0/12,
+// 192.168.0.0/16 -- and their IPv6 ULA equivalent, fc00::/7) -- covers
+// browsing to this machine's own network IP (e.g. http://192.168.1.50/...)
+// from another device on the same LAN. Uses PHP's own validated ranges
+// rather than hand-rolled CIDR math for this part, since getting a
+// security-relevant IP range check subtly wrong is an easy mistake to make
+// by hand.
+$isPrivateLanIp = filter_var($host, FILTER_VALIDATE_IP) !== false
+    && filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE) === false;
 
+// Tailscale IPv4 CGNAT range (100.64.0.0/10, RFC 6598) -- this is a
+// *separate* reserved block from the RFC 1918 ranges above, so it needs its
+// own check; every device's Tailscale IP falls somewhere in here.
+$isTailscaleIp = false;
 if (filter_var($host, FILTER_VALIDATE_IP)) {
     $ip = ip2long($host);
-
     if ($ip !== false) {
-        $isTailscale =
+        $isTailscaleIp =
             $ip >= ip2long('100.64.0.0') &&
             $ip <= ip2long('100.127.255.255');
     }
 }
+
+// Tailscale MagicDNS hostnames are always "<device>.<tailnet-name>.ts.net"
+// -- e.g. https://my-desktop.tail1a2b3c.ts.net/... -- so any hostname
+// ending in ".ts.net" is a Tailscale device, regardless of tailnet name.
+// (A bare short MagicDNS name with no ".ts.net" suffix looks like any other
+// hostname and can't be told apart safely by pattern alone -- if you use
+// short names, add them to APP_TRUSTED_HOSTS below instead.)
+$isTailscaleHostname = $host !== '' && substr($host, -7) === '.ts.net';
+
+// Escape hatch for anything the checks above don't anticipate -- a bare
+// Tailscale short name, a custom mDNS/.local hostname, a VPN hostname, etc.
+// Comma-separated exact hostnames (no scheme, no port), e.g.:
+//   APP_TRUSTED_HOSTS=my-laptop,my-laptop.local,office-pc
+$trustedHosts = array_filter(array_map('trim', explode(',', strtolower((string) (getenv('APP_TRUSTED_HOSTS') ?: '')))));
+$isExplicitlyTrustedHost = $host !== '' && in_array($host, $trustedHosts, true);
+
+$isTrustedLocalAccess = $isLocalhost
+    || $isPrivateLanIp
+    || $isTailscaleIp
+    || $isTailscaleHostname
+    || $isExplicitlyTrustedHost;
 
 // Only force HTTPS for public/production access
 if (
     ($config['force_https'] ?? true) &&
     $env === 'production' &&
     !$isHttps &&
-    !$isLocalhost &&
-    !$isTailscale &&
+    !$isTrustedLocalAccess &&
     php_sapi_name() !== 'cli'
 ) {
     http_response_code(403);

@@ -450,12 +450,13 @@ async function notDelivered(button){
 }
 function initRouteMap(){
     const el=id('routeMap'); if(!el||!window.L||!Array.isArray(window.deliveryRouteStops))return;
-    if(window.deliveryRouteMap){window.deliveryRouteMap.invalidateSize();if(window.deliveryRouteBounds)window.deliveryRouteMap.fitBounds(window.deliveryRouteBounds,{padding:[30,30],maxZoom:16});return;}
+    if(window.deliveryRouteMap){window.deliveryRouteMap.invalidateSize();if(window.deliveryRouteBounds)window.deliveryRouteMap.fitBounds(window.deliveryRouteBounds,{padding:[30,30],maxZoom:16});suggestNearestStop();return;}
     const stops=window.deliveryRouteStops.filter(s=>Number(s.Latitude)&&Number(s.Longitude));
     if(!stops.length){el.closest('.route-map-wrap')?.classList.add('dc-hidden');return;}
     const map=L.map(el);
     window.deliveryRouteMap=map;
     window.deliveryRouteMarkers={};
+    window.deliveryRouteStopMeta={};
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'OpenStreetMap'}).addTo(map);
     const latlngs=[];
     stops.forEach(stop=>{
@@ -466,9 +467,11 @@ function initRouteMap(){
         const address=[stop.Street,stop.Barangay,stop.Municipality,stop.Province].filter(Boolean).join(', ');
         const marker=L.marker([lat,lng],{icon}).addTo(map).bindPopup(`<strong>#${stop.DisplaySeq} Trip ${stop.TripId} &ndash; ${stop.CustomerName}</strong><br>${address}`);
         window.deliveryRouteMarkers[stop.DisplaySeq]=marker;
+        window.deliveryRouteStopMeta[stop.DisplaySeq]={lat,lng,delivered,tripId:stop.TripId,customerName:stop.CustomerName};
     });
     window.deliveryRouteBounds=latlngs.length>1?latlngs:[latlngs[0],[latlngs[0][0]+0.001,latlngs[0][1]+0.001]];
     map.fitBounds(window.deliveryRouteBounds,{padding:[30,30],maxZoom:16});
+    suggestNearestStop();
     if(latlngs.length<2)return;
     // Fallback: a straight dashed line, shown immediately and replaced by the
     // real driving route below once/if it loads.
@@ -483,6 +486,180 @@ function initRouteMap(){
             routeLine=L.polyline(coords.map(c=>[c[1],c[0]]),{color:'#a71927',weight:4,opacity:.85}).addTo(map);
         })
         .catch(error=>console.warn('Route directions unavailable, showing straight line instead.',error));
+}
+
+/** Great-circle distance in meters between two lat/lng points. Used as a
+ *  fallback when the driving-distance lookup below is unavailable. */
+function haversineMeters(lat1,lng1,lat2,lng2){
+    const a=Math.PI/180;
+    const h=Math.sin((lat2-lat1)*a/2)**2+Math.cos(lat1*a)*Math.cos(lat2*a)*Math.sin((lng2-lng1)*a/2)**2;
+    return 2*6371000*Math.atan2(Math.sqrt(h),Math.sqrt(1-h));
+}
+
+/**
+ * Real driving distance from `here` to every pending stop, in one request,
+ * via OSRM's table (distance-matrix) service -- the same routing engine
+ * already used to draw the route line on the map. Returns whichever
+ * pending stop is shortest to actually *drive* to (not straight-line), so
+ * a stop across the bay/a river doesn't get suggested just because it
+ * looks close on the map. Throws if OSRM is unreachable/rate-limited/slow,
+ * so the caller can fall back to straight-line distance instead.
+ */
+async function nearestByDrivingDistance(here,pending){
+    if(!pending.length)throw new Error('No pending stops.');
+    const coords=[`${here[1]},${here[0]}`,...pending.map(([,stop])=>`${stop.lng},${stop.lat}`)].join(';');
+    const destinations=pending.map((_,i)=>i+1).join(';');
+    const url=`https://router.project-osrm.org/table/v1/driving/${coords}?sources=0&destinations=${destinations}&annotations=distance`;
+    const controller=new AbortController();
+    const timeout=setTimeout(()=>controller.abort(),8000);
+    let data;
+    try{
+        const response=await fetch(url,{signal:controller.signal});
+        if(!response.ok)throw new Error(`OSRM table request failed (${response.status}).`);
+        data=await response.json();
+    }finally{
+        clearTimeout(timeout);
+    }
+    const distances=data?.distances?.[0];
+    if(!Array.isArray(distances))throw new Error('OSRM table response missing distances.');
+    let nearestIndex=null,nearestDistance=Infinity;
+    distances.forEach((distance,i)=>{
+        if(typeof distance==='number'&&distance<nearestDistance){nearestDistance=distance;nearestIndex=i;}
+    });
+    if(nearestIndex===null)throw new Error('OSRM could not find a driving route to any pending stop.');
+    const[seq]=pending[nearestIndex];
+    return{seq,distanceMeters:nearestDistance,mode:'driving'};
+}
+
+/** Straight-line fallback -- used only if the driving-distance lookup above
+ *  fails (offline, OSRM unavailable/rate-limited, request timed out). */
+function nearestByStraightLine(here,pending){
+    let nearestSeq=null,nearestDistance=Infinity;
+    pending.forEach(([seq,stop])=>{
+        const distance=haversineMeters(here[0],here[1],stop.lat,stop.lng);
+        if(distance<nearestDistance){nearestDistance=distance;nearestSeq=seq;}
+    });
+    if(nearestSeq===null)return null;
+    return{seq:nearestSeq,distanceMeters:nearestDistance,mode:'straight-line'};
+}
+
+/**
+ * Rather than always pointing the rider at the next stop in assigned
+ * sequence order, this finds whichever *unresolved* stop is closest to the
+ * rider's current GPS position by actual driving distance -- e.g. sequence
+ * says #2 next, but #3 is actually nearer to drive to right now, so #3 gets
+ * suggested instead. Purely a suggestion: it doesn't change
+ * SortNum/DisplaySeq or reorder the table, it just highlights the nearest
+ * pin and surfaces a "go here next" banner + a "Nearest" tag on that row.
+ */
+let routeSuggestedSeq=null;
+function suggestNearestStop(){
+    const banner=id('routeSuggestion');
+    const meta=window.deliveryRouteStopMeta;
+    if(!banner||!meta)return;
+
+    const pending=Object.entries(meta).filter(([,stop])=>!stop.delivered);
+    document.querySelectorAll('.route-nearest-badge').forEach(badge=>badge.classList.add('dc-hidden'));
+    Object.keys(window.deliveryRouteMarkers||{}).forEach(seq=>{
+        const marker=window.deliveryRouteMarkers[seq];
+        const stop=meta[seq];
+        if(!marker||!stop)return;
+        marker.setIcon(L.divIcon({className:'route-pin'+(stop.delivered?' route-pin--done':''),html:`<span>${seq}</span>`,iconSize:[28,28],iconAnchor:[14,14]}));
+    });
+    routeSuggestedSeq=null;
+
+    if(!pending.length){
+        banner.classList.remove('dc-hidden');
+        id('routeSuggestionText').textContent='All assigned stops are resolved -- nothing left to suggest.';
+        id('routeSuggestionFocus').disabled=true;
+        return;
+    }
+    if(!navigator.geolocation){
+        banner.classList.add('dc-hidden');
+        return;
+    }
+
+    navigator.geolocation.getCurrentPosition(async position=>{
+        const here=[position.coords.latitude,position.coords.longitude];
+        let nearest=null;
+        try{
+            nearest=await nearestByDrivingDistance(here,pending);
+        }catch(error){
+            console.warn('Driving-distance lookup unavailable, falling back to straight-line distance.',error);
+        }
+        if(!nearest)nearest=nearestByStraightLine(here,pending);
+        if(!nearest)return;
+
+        const{seq:nearestSeq,distanceMeters:nearestDistance,mode}=nearest;
+        routeSuggestedSeq=nearestSeq;
+        const stop=meta[nearestSeq];
+        const distanceLabel=nearestDistance>=1000?`${(nearestDistance/1000).toFixed(1)} km`:`${Math.round(nearestDistance)} m`;
+        const modeLabel=mode==='driving'?'by road':'straight-line, driving distance unavailable';
+        banner.classList.remove('dc-hidden');
+        id('routeSuggestionText').textContent=`Suggested next stop: #${nearestSeq} \u00b7 ${stop.customerName} (Trip ${stop.tripId}) \u2014 about ${distanceLabel} away (${modeLabel})`;
+        id('routeSuggestionFocus').disabled=false;
+
+        const marker=window.deliveryRouteMarkers?.[nearestSeq];
+        if(marker){
+            marker.setIcon(L.divIcon({className:'route-pin route-pin--suggested',html:`<span>${nearestSeq}</span>`,iconSize:[28,28],iconAnchor:[14,14]}));
+        }
+        document.querySelector(`.route-table tr[data-seq="${nearestSeq}"] .route-nearest-badge`)?.classList.remove('dc-hidden');
+        showRiderLocationOnMap(here,nearestSeq);
+    },()=>{
+        banner.classList.remove('dc-hidden');
+        id('routeSuggestionText').textContent='Enable location access to see which unresolved stop is nearest.';
+        id('routeSuggestionFocus').disabled=true;
+    },{enableHighAccuracy:true,timeout:12000});
+}
+
+/**
+ * Places a "you are here" marker at the rider's current GPS position on the
+ * route map, and draws a real driving-route line connecting it to whichever
+ * stop is currently suggested as next (falling back to the next stop in
+ * assigned sequence when nothing stands out as nearer -- see
+ * suggestNearestStop() above) -- so the rider can see where they are
+ * relative to the route, not just the numbered stops on their own. Reuses
+ * the position already fetched for that suggestion rather than asking the
+ * device for location a second time. Safe to call repeatedly (e.g. every
+ * time the suggestion refreshes): it moves the existing marker/line instead
+ * of stacking up duplicates.
+ */
+function showRiderLocationOnMap(here,targetSeq){
+    const map=window.deliveryRouteMap;
+    if(!map)return;
+
+    if(window.deliveryRiderMarker){
+        window.deliveryRiderMarker.setLatLng(here);
+    }else{
+        window.deliveryRiderMarker=L.marker(here,{
+            icon:L.divIcon({className:'rider-location-marker',iconSize:[20,20],iconAnchor:[10,10]}),
+            zIndexOffset:1000,
+        }).addTo(map).bindPopup('Your current location');
+    }
+
+    if(window.deliveryRiderLine){
+        window.deliveryRiderLine.remove();
+        window.deliveryRiderLine=null;
+    }
+    const stop=window.deliveryRouteStopMeta?.[targetSeq];
+    if(!stop)return;
+
+    const target=[stop.lat,stop.lng];
+    // Fallback: a straight dashed line, shown immediately and replaced by
+    // the real driving route below once/if it loads -- same pattern as the
+    // main stop-to-stop route line, just in blue (matching the suggested
+    // pin's color) to read as "you are here" rather than the assigned
+    // stop-to-stop route, which stays red.
+    window.deliveryRiderLine=L.polyline([here,target],{color:'#0d6efd',weight:3,dashArray:'4,8',opacity:.85}).addTo(map);
+    fetch(`https://router.project-osrm.org/route/v1/driving/${here[1]},${here[0]};${target[1]},${target[0]}?overview=full&geometries=geojson`)
+        .then(r=>r.json())
+        .then(data=>{
+            const coords=data.routes?.[0]?.geometry?.coordinates;
+            if(!coords||!window.deliveryRiderLine)return;
+            window.deliveryRiderLine.remove();
+            window.deliveryRiderLine=L.polyline(coords.map(c=>[c[1],c[0]]),{color:'#0d6efd',weight:4,opacity:.85}).addTo(map);
+        })
+        .catch(error=>console.warn('Rider-to-stop route directions unavailable, showing straight line instead.',error));
 }
 
 /** Pans/zooms the already-open route map to one stop's pin and opens its
@@ -531,6 +708,8 @@ document.addEventListener('DOMContentLoaded',()=>{
         setTimeout(initRouteMap, 150);
     });
     id('closeRoute')?.addEventListener('click', () => id('routeModal').classList.remove('active'));
+    id('routeSuggestionFocus')?.addEventListener('click', () => { if (routeSuggestedSeq !== null) focusRouteStop(routeSuggestedSeq); });
+    id('routeSuggestionRefresh')?.addEventListener('click', suggestNearestStop);
     document.querySelectorAll('.route-focus-customer').forEach((link) => {
         link.addEventListener('click', (e) => {
             e.preventDefault();

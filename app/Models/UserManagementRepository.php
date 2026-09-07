@@ -18,7 +18,8 @@ class UserManagementRepository
             ISNULL(MAX(CASE WHEN A.MODULE = 'Collection-Transactions' AND A.ACCESS = 1 THEN 1 ELSE 0 END), 0) AS CanTransactions,
             ISNULL(MAX(CASE WHEN A.MODULE = 'Collection-Transactions-Admin' AND A.ACCESS = 1 THEN 1 ELSE 0 END), 0) AS CanManageTransactions,
             ISNULL(MAX(CASE WHEN A.MODULE = 'Delivery-Transactions' AND A.ACCESS = 1 THEN 1 ELSE 0 END), 0) AS CanDeliveryTransactions,
-            ISNULL(MAX(CASE WHEN A.MODULE = 'Delivery-Transactions-Admin' AND A.ACCESS = 1 THEN 1 ELSE 0 END), 0) AS CanManageDeliveryTransactions
+            ISNULL(MAX(CASE WHEN A.MODULE = 'Delivery-Transactions-Admin' AND A.ACCESS = 1 THEN 1 ELSE 0 END), 0) AS CanManageDeliveryTransactions,
+            ISNULL(MAX(CASE WHEN A.MODULE = 'Trip-List-Assign' AND A.ACCESS = 1 THEN 1 ELSE 0 END), 0) AS CanTriplistAssign
             FROM UserList U LEFT JOIN UserAccess A ON A.USERID = U.USERID
             GROUP BY U.PK, U.USERID, U.IMEI, U.NAME, U.SALESMANID, U.LocationLock
             ORDER BY U.USERID");
@@ -108,6 +109,7 @@ class UserManagementRepository
             'Collection-Transactions-Admin' => 'can_manage_transactions',
             'Delivery-Transactions' => 'can_delivery_transactions',
             'Delivery-Transactions-Admin' => 'can_manage_delivery_transactions',
+            'Trip-List-Assign' => 'can_triplist_assign',
         ];
         foreach ($modules as $module => $field) {
             $statement = $this->pdo->prepare("UPDATE UserAccess SET ACCESS = :accessUpdate WHERE USERID = :userUpdate AND MODULE = :moduleUpdate; IF @@ROWCOUNT = 0 INSERT INTO UserAccess (USERID, MODULE, ACCESS) VALUES (:userInsert, :moduleInsert, :accessInsert);");

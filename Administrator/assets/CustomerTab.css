@@ -156,37 +156,9 @@
 }
 
 
-/* ================= BACK TO TOP ================= */
-
-#backToTop{
-    position:fixed;
-    bottom:25px;
-    right:25px;
-    width:60px;
-    height:60px;
-    border:none;
-    border-radius:50%;
-    background:#19a7e0; 
-    color:#fff;
-    font-size:24px;
-    cursor:pointer;
-    box-shadow:0 4px 15px rgba(0,0,0,.25);
-    z-index:9999;
-
-    opacity:0;
-    visibility:hidden;
-    transition:.3s;
-}
-
-#backToTop:hover{
-    transform:translateY(-3px);
-    box-shadow:0 8px 20px rgba(0,0,0,.35);
-}
-
-#backToTop.show{
-    opacity:1;
-    visibility:visible;
-}
+/* ================= BACK TO TOP =================
+   Moved to dashboard.css (global) since #backToTop is loaded on every page
+   via footer.php, and this file is no longer loaded anywhere. */
 
 /* ================= AUTOCOMPLETE ================= */
 

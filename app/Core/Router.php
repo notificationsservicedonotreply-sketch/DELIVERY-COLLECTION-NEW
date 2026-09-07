@@ -22,6 +22,7 @@ final class Router
     private const ROUTES = [
         'Dashboard' => [DashboardController::class, 'index', null, null],
         'Delivery-Portal' => [DeliveryController::class, 'portal', 'Delivery-Portal', null],
+        'Trip-List-Assign' => [TripListAssignController::class, 'index', 'Trip-List-Assign', null],
         'Delivery-Transactions' => [DeliveryController::class, 'transactions', null, 'canAccessDeliveryTransactions'],
         'Delivery-Transaction-Details' => [DeliveryController::class, 'transactionDetail', null, 'canAccessDeliveryTransactions'],
         'Collection-Portal' => [CollectionController::class, 'portal', 'Collection-Portal', null],
@@ -65,6 +66,23 @@ final class Router
             exit;
         }
         $_SESSION['last_activity'] = time();
+
+        // System Maintenance: while enabled, every page is replaced with a
+        // maintenance notice for everyone *except* whoever can manage users
+        // (see SettingsController's docblock for why that's the chosen
+        // "admin" proxy) -- so the person who turned it on can always turn
+        // it back off, and never gets locked out along with everyone else.
+        // Reads defensively default to "off" (see SystemSettingsRepository),
+        // so a settings-table hiccup can never accidentally take the whole
+        // app down.
+        global $pdo;
+        $maintenance = new SystemSettingsRepository($pdo);
+        if ($maintenance->isMaintenanceMode() && !hasModuleAccess('User-Management')) {
+            View::render('maintenance/index', [
+                'message' => $maintenance->maintenanceMessage(),
+            ], []);
+            return;
+        }
 
         if ($checker !== null) {
             if (!call_user_func($checker)) {

@@ -8,6 +8,7 @@ class DeliveryCollectionRepository
     /** Per-request memoization caches. These values don't change mid-request,
      *  so we avoid re-hitting the database every time a caller asks again. */
     private ?float $radiusCache = null;
+    private ?float $deliveryRadiusCache = null;
     private array $locationLockCache = [];
     private array $customerUnlockedCache = [];
     private ?bool $unlockTableExistsCache = null;
@@ -32,13 +33,23 @@ class DeliveryCollectionRepository
         return $this->databaseNameColumnCache[$table];
     }
 
+    /** GPS validation radius (meters) for the Collection Portal. Editable
+     *  from Settings > Delivery Radius -- see SystemSettingsRepository,
+     *  which this delegates to (also the source of the safe-default value
+     *  used if the setting is missing/invalid). */
     public function radius()
     {
         if ($this->radiusCache !== null) return $this->radiusCache;
-        $stmt = $this->pdo->prepare("SELECT DecimalValue FROM SystemSettings WHERE SettingKey = 'DeliveryCollectionRadiusMeters'");
-        $stmt->execute();
-        $value = $stmt->fetchColumn();
-        return $this->radiusCache = ($value === false || (float) $value <= 0) ? 5.0 : (float) $value;
+        return $this->radiusCache = (new SystemSettingsRepository($this->pdo))->deliveryCollectionRadiusMeters();
+    }
+
+    /** GPS validation radius (meters) for the Delivery Portal specifically
+     *  -- separate from the Collection Portal's radius() above, since each
+     *  portal has its own configurable value in Settings > Delivery Radius. */
+    public function deliveryRadius()
+    {
+        if ($this->deliveryRadiusCache !== null) return $this->deliveryRadiusCache;
+        return $this->deliveryRadiusCache = (new SystemSettingsRepository($this->pdo))->deliveryRadiusMeters();
     }
 
     /** Shared by both the Collection and Delivery portals — always returns at most 20 rows.

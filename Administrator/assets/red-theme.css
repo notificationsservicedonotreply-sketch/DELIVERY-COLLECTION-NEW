@@ -52,8 +52,8 @@ body { background:linear-gradient(135deg,#fff8f8 0%,#f6f0f1 100%); color:var(--m
     .transaction-filter-grid { display:grid; grid-template-columns:1fr; gap:10px; }.filter-field .input { min-width:0; }
     .scope-options { flex-wrap:wrap; gap:9px 13px; }.check-option { min-height:38px; }
     .transaction-table-header { align-items:flex-start; flex-direction:column; }
-    .table-wrapper { max-height:none; border-radius:10px; }.table { min-width:650px; }
-    .transaction-table { min-width:760px; }.transaction-view { white-space:nowrap; }
+    .table-wrapper { max-height:none; border-radius:10px; }.table:not(.dynamic-table) { min-width:650px; }
+    .transaction-table:not(.dynamic-table) { min-width:760px; }.transaction-view { white-space:nowrap; }
     .detail-header-grid { grid-template-columns:1fr; }.detail-wide { grid-column:auto; }
     .transaction-detail-heading { align-items:flex-start; flex-direction:column; }.transaction-back { width:100%; text-align:center; }
     .custom-modal { padding:8px; }.custom-modal-content { width:100%; max-height:calc(100vh - 16px); }

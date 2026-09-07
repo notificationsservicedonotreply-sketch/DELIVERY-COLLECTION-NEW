@@ -31,6 +31,12 @@
         </a>
         <?php endif; ?>
 
+        <?php if (hasModuleAccess('Trip-List-Assign')): ?>
+        <a href="<?= Router::url('Trip-List-Assign') ?>">
+            <i class="fa-solid fa-list-check" aria-hidden="true"></i> Trip List Assign
+        </a>
+        <?php endif; ?>
+
         <?php if (hasModuleAccess('User-Management')): ?>
         <a href="<?= Router::url('User-Management') ?>">
             <i class="fa-solid fa-users-gear" aria-hidden="true"></i> User Management

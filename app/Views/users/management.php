@@ -37,6 +37,7 @@
                         <th>Transaction administrator</th>
                         <th>Delivery transactions</th>
                         <th>Delivery transactions administrator</th>
+                        <th>Trip list assign</th>
                         <th>Action</th>
                     </tr>
                 </thead>
@@ -54,6 +55,7 @@
                             <td data-label="Transaction administrator"><?= !empty($user['CanManageTransactions']) ? '✓' : '—' ?></td>
                             <td data-label="Delivery transactions"><?= !empty($user['CanDeliveryTransactions']) ? '✓' : '—' ?></td>
                             <td data-label="Delivery transactions administrator"><?= !empty($user['CanManageDeliveryTransactions']) ? '✓' : '—' ?></td>
+                            <td data-label="Trip list assign"><?= !empty($user['CanTriplistAssign']) ? '✓' : '—' ?></td>
                             <td data-label="Actions">
                                 <div class="user-action-buttons">
                                     <button type="button" class="btn btn-blue edit-user"><i class="fa-solid fa-pen"></i><span>Edit</span></button>
@@ -166,15 +168,6 @@
                         <label class="permission-option">
                             <input
                                 type="checkbox"
-                                name="can_delivery"
-                                id="canDelivery"
-                            >
-                            <span>Delivery portal</span>
-                        </label>
-
-                        <label class="permission-option">
-                            <input
-                                type="checkbox"
                                 name="can_collection"
                                 id="canCollection"
                             >
@@ -187,7 +180,7 @@
                                 name="can_transactions"
                                 id="canTransactions"
                             >
-                            <span>Transactions</span>
+                            <span>Collection Transactions</span>
                         </label>
 
                         <label class="permission-option permission-option--admin">
@@ -196,7 +189,16 @@
                                 name="can_manage_transactions"
                                 id="canManageTransactions"
                             >
-                            <span>Transaction administrator <small>Can view all salesmen records, including without a Salesman ID</small></span>
+                            <span>Collection Transaction administrator <small>Can view all salesmen records, including without a Salesman ID</small></span>
+                        </label>
+
+                        <label class="permission-option">
+                            <input
+                                type="checkbox"
+                                name="can_delivery"
+                                id="canDelivery"
+                            >
+                            <span>Delivery portal</span>
                         </label>
 
                         <label class="permission-option">
@@ -214,7 +216,17 @@
                                 name="can_manage_delivery_transactions"
                                 id="canManageDeliveryTransactions"
                             >
-                            <span>Delivery transactions administrator <small>Can view every rider's delivery history</small></span>
+                            <span>Delivery transactions administrator <small>Can view every salesmen delivery history</small></span>
+                    
+                        </label>
+
+                        <label class="permission-option">
+                            <input
+                                type="checkbox"
+                                name="can_triplist_assign"
+                                id="canTriplistAssign"
+                            >
+                            <span>Trip list assign <small>Can view and manage the Trip List Assign menu</small></span>
                         </label>
 
                         <label class="permission-option">

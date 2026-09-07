@@ -13,6 +13,15 @@
  *   DB1_SERVER, DB1_NAME, DB1_USER, DB1_PASS
  *   APP_ENV            'production' | 'development'  (default: production)
  *   APP_FORCE_HTTPS    '1' to require HTTPS in production (default: '1')
+ *   APP_TRUSTED_HOSTS  optional comma-separated hostnames (no scheme/port)
+ *                      that skip the HTTPS requirement above even in
+ *                      production, e.g. a bare Tailscale MagicDNS short
+ *                      name or a custom .local hostname that bootstrap.php
+ *                      can't recognize automatically. Localhost, LAN IPs
+ *                      (192.168.x.x/10.x.x.x/172.16-31.x.x), Tailscale IPs
+ *                      (100.64.0.0/10), and any *.ts.net hostname are
+ *                      already trusted without needing to be listed here --
+ *                      see bootstrap.php.
  */
 
 function config_require(string $name): string
