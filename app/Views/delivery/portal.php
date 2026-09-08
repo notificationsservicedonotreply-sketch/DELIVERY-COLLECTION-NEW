@@ -26,10 +26,77 @@
         .route-focus-customer:hover{color:#0958c9}
         .route-seq-badge{display:inline-block;min-width:22px;padding:2px 6px;border-radius:999px;background:#a71927;color:#fff;font-weight:bold;text-align:center;font-size:12px}
         .delivery-action-cell{display:flex;flex-direction:column;gap:6px;min-width:180px}
+        @media (min-width:721px){
+            .delivery-action-cell{flex-direction:row;flex-wrap:wrap;align-items:center}
+            .delivery-action-cell .not-delivered-reason{flex-basis:100%}
+        }
         .not-delivered-reason{margin-top:6px;background:#fff5f5;border:1px solid #f3c2c2;border-radius:8px;padding:8px}
         .not-delivered-reason-text{width:100%;resize:vertical;margin-bottom:6px}
         .not-delivered-reason-actions{display:flex;gap:6px;justify-content:flex-end}
         tr.row-not-delivered{opacity:.6}
+        tr.row-pending-delivered{background:#f3fbf6}
+        /* On mobile the action cell stretches every child to full width by
+           default (flex-direction:column). The badge/"Change" pairing used
+           to opt "Change" out of that with align-self:flex-start, which left
+           it small and left-aligned while Confirm/Not received stayed full
+           width -- inconsistent from a tap-target standpoint. Only apply
+           that narrower, left-aligned treatment once the cell switches to a
+           row on desktop; on mobile it now stretches like the other
+           buttons. */
+        .resolution-pending-badge{align-self:center}
+        @media (min-width:721px){
+            .resolution-undo{align-self:center}
+        }
+        /* Compact "unsaved" indicator: was a full-width text banner
+           ("Marked delivered (unsaved)") that ate most of the row and was
+           the main reason "Change" got pushed onto its own line on desktop.
+           Now a small pill with the detail in a tooltip -- hover on desktop,
+           tap-to-focus on mobile/touch. */
+        .status-chip{position:relative;display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:800;white-space:nowrap;cursor:help}
+        .status-chip--delivered{background:#e6f4ea;color:#146c43}
+        .status-chip--not-received{background:#fdecea;color:#a71927}
+        .status-chip[data-tooltip]:hover::after,
+        .status-chip[data-tooltip]:focus::after{
+            content:attr(data-tooltip);
+            position:absolute;
+            bottom:calc(100% + 7px);
+            left:50%;
+            transform:translateX(-50%);
+            background:#1f2937;
+            color:#fff;
+            padding:6px 9px;
+            border-radius:6px;
+            font-size:11px;
+            font-weight:600;
+            white-space:normal;
+            width:max-content;
+            max-width:220px;
+            line-height:1.35;
+            z-index:20;
+            box-shadow:0 4px 10px rgba(0,0,0,.25);
+        }
+        .status-chip[data-tooltip]:hover::before,
+        .status-chip[data-tooltip]:focus::before{
+            content:'';
+            position:absolute;
+            bottom:calc(100% + 2px);
+            left:50%;
+            transform:translateX(-50%);
+            border:5px solid transparent;
+            border-top-color:#1f2937;
+            z-index:20;
+        }
+        .deposit-slip-btn--uploaded{background:#146c43}
+        .deposit-slip-uploaded-badge{margin-left:5px;padding:1px 7px;border-radius:999px;background:rgba(255,255,255,.28);font-size:10px;font-weight:800;letter-spacing:.02em;text-transform:uppercase}
+        /* Route table's "Open"/"Deposit Slip" pair (only 2 short buttons,
+           never needs the reason-textarea wrapping the invoice-table action
+           cell needs) should always sit side by side -- the table already
+           scrolls horizontally on narrow screens, so that's the fallback
+           instead of stacking. Specificity here intentionally beats both the
+           row/column media queries above and dashboard.css's mobile
+           .dynamic-table td[data-label="Action"] column rule. */
+        .route-table td.delivery-action-cell{display:flex !important;flex-direction:row !important;flex-wrap:nowrap !important;gap:8px;align-items:center;justify-content:center;min-width:0}
+        .route-table td.delivery-action-cell > *{flex:0 0 auto;white-space:nowrap}
         .route-modal-content{width:85%;max-width:none}
         /* .modal-body is defined in two stylesheets with conflicting rules
            (dashboard.css sets overflow:auto, dashboard_card.css -- loaded
@@ -136,9 +203,19 @@
                                 $statusLabel = $isDone
                                     ? ($notDelivered > 0 ? "Delivered ({$notDelivered} not received)" : 'Delivered')
                                     : "{$resolved}/{$totalInv} resolved";
-                                // Deposit Slip is only for stops where every invoice was actually
-                                // delivered (not "not received"/mixed) -- i.e. statusLabel === 'Delivered'.
-                                $canUploadDepositSlip = $isDone && $notDelivered === 0;
+                                // Deposit Slip upload is gated on rider type
+                                // alone: only a JKAS rider can upload one,
+                                // once the stop is fully resolved -- whether
+                                // that resolution ended in "Delivered" or
+                                // "Delivered (N not received)" no longer
+                                // matters.
+                                $hasDepositSlip = (int) ($stop['HasDepositSlip'] ?? 0) === 1;
+                                $canUploadDepositSlip = $isDone && $isJkasRider;
+                                $depositSlipTitle = !$isJkasRider
+                                    ? 'Deposit slip upload is only available for JKAS riders.'
+                                    : ($canUploadDepositSlip
+                                        ? ($hasDepositSlip ? 'Deposit slip already uploaded — tap to view or replace it' : 'Upload the deposit slip for this delivery')
+                                        : 'Available once this stop is fully delivered');
                             ?>
                             <tr class="<?= $isCurrent ? 'route-row-current' : '' ?>" data-seq="<?= htmlspecialchars((string) $stop['DisplaySeq']) ?>" data-done="<?= $isDone ? '1' : '0' ?>">
                                 <td data-label="#"><span class="route-seq-badge"><?= htmlspecialchars((string) $stop['DisplaySeq']) ?></span> <span class="route-nearest-badge dc-hidden"><i class="fa-solid fa-location-arrow" aria-hidden="true"></i> Nearest</span></td>
@@ -150,13 +227,13 @@
                                     <a class="btn btn-blue" href="?page=Delivery-Portal&customer=<?= urlencode((string) $stop['CustomerId']) ?>"><i class="fa-solid fa-arrow-right" aria-hidden="true"></i> Open</a>
                                     <button
                                         type="button"
-                                        class="btn btn-gray deposit-slip-btn"
+                                        class="btn <?= $hasDepositSlip ? 'btn-green deposit-slip-btn--uploaded' : 'btn-gray' ?> deposit-slip-btn"
                                         data-trip-id="<?= htmlspecialchars((string) $stop['TripId'], ENT_QUOTES) ?>"
                                         data-customer-id="<?= htmlspecialchars((string) $stop['CustomerId'], ENT_QUOTES) ?>"
                                         data-customer-name="<?= htmlspecialchars((string) $stop['CustomerName'], ENT_QUOTES) ?>"
                                         <?= $canUploadDepositSlip ? '' : 'disabled' ?>
-                                        title="<?= $canUploadDepositSlip ? 'Upload the deposit slip for this delivery' : 'Available once this stop is fully delivered' ?>"
-                                    ><i class="fa-solid fa-receipt" aria-hidden="true"></i> Deposit Slip</button>
+                                        title="<?= htmlspecialchars($depositSlipTitle, ENT_QUOTES) ?>"
+                                    ><i class="fa-solid <?= $hasDepositSlip ? 'fa-circle-check' : 'fa-receipt' ?>" aria-hidden="true"></i> Deposit Slip<?= $hasDepositSlip ? ' <span class="deposit-slip-uploaded-badge">Uploaded</span>' : '' ?></button>
                                 </td>
                             </tr>
                             <?php endforeach; ?>
@@ -329,13 +406,21 @@
                     </tbody>
                 </table>
             </div>
+            <?php if ($requiresCollection): ?>
+            <div class="footer-actions">
+                <button id="resumeCollection" type="button" class="btn btn-blue dc-hidden"><i class="fa-solid fa-hand-holding-dollar" aria-hidden="true"></i> Resume collection</button>
+            </div>
+            <?php endif; ?>
         </div>
 </div>
 
         <?php if ($requiresCollection): ?>
         <!-- Collection Portal Modal (required before delivery can be confirmed
              for this rider/customer: UserList.SType = 'JKAS' or
-             Customers.SellingType IS NULL) -->
+             Customers.SellingType IS NULL). Every invoice is resolved
+             locally first ("temporary only"); once all are resolved this
+             modal opens automatically, pre-filled with the confirmed
+             invoices, and the final submit saves both together. -->
         <div class="custom-modal" id="collectionRequiredModal" role="dialog" aria-modal="true" aria-labelledby="collectionRequiredTitle">
             <div class="custom-modal-content route-modal-content">
                 <div class="modal-header">
@@ -343,7 +428,7 @@
                     <button class="close-btn" id="closeCollectionRequired" aria-label="Close">&times;</button>
                 </div>
                 <div class="modal-body">
-                    <div class="notice info">This customer requires a collection to be recorded before the delivery can be confirmed.</div>
+                    <div class="notice info">This customer requires a collection. Confirm every invoice above, then record the collection here to finish this delivery.</div>
 
                     <div id="collectionDetails">
                         <!-- Step 1: PR Number -->

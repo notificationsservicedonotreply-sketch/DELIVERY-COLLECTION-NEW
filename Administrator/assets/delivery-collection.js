@@ -20,6 +20,14 @@ let collectionCompletedForDelivery = false;
 // required Collection modal, so it can be completed automatically once the
 // collection has been saved.
 let pendingDeliveryAfterCollection = null;
+// Delivery Portal, "requires collection" customers only: every invoice is
+// resolved locally first ("temporary only" -- nothing saved to the server
+// yet). Keyed by `${tripId}::${invoiceNo}`, each entry holds what's needed
+// to replay that resolution server-side once the Collection is saved.
+const pendingDeliveryResolutions = new Map();
+// True once every invoice for this stop has been resolved locally and the
+// Collection modal has been opened for the final combined submit.
+let finalSubmitMode = false;
 
 // Resolved on demand (not once at script-parse time) so it never depends on
 // whether this script tag happens to load before or after the #moduleName
@@ -374,16 +382,12 @@ async function deliver(button){
 
         // Some riders (UserList.SType = 'JKAS') or customers not yet
         // classified (Customers.SellingType IS NULL) must have a Collection
-        // recorded before this delivery can be confirmed. Park this button's
-        // delivery, open the embedded Collection Portal modal, and resume
-        // here (via saveCollectionThenDeliver) once it's saved.
-        if (window.deliveryRequiresCollection && !collectionCompletedForDelivery) {
-            pendingDeliveryAfterCollection = { button };
-            collectionAccessGranted = true;
-            collectionInRange = true;
-            updateCollectionTotals();
-            id('collectionRequiredModal')?.classList.add('active');
-            notice('This customer requires a collection to be recorded before delivery can be confirmed.', 'info');
+        // recorded before delivery is confirmed. For these, every invoice is
+        // staged locally ("temporary only") -- nothing is saved until every
+        // invoice for this stop has been resolved and the Collection is
+        // recorded, at which point both are saved together in one request.
+        if (window.deliveryRequiresCollection) {
+            stageDeliveryResolution(button, 'delivered', { photo });
             return;
         }
 
@@ -409,6 +413,207 @@ async function deliver(button){
         notice(error.message, 'error');
     }
 }
+
+/**
+ * Stages one invoice's resolution (delivered or not received) locally
+ * instead of saving it right away -- used only for customers where
+ * window.deliveryRequiresCollection is true. The row is visually marked as
+ * resolved-but-unsaved, with a "Change" button to undo it, and once every
+ * invoice for this stop is staged, the Collection modal opens automatically
+ * for the final combined submit.
+ */
+function stageDeliveryResolution(button, status, extra) {
+    const row = button.closest('tr');
+    if (!row || !gps) return;
+    const tripId = button.dataset.tripId;
+    const invoiceNo = button.dataset.invoiceNo;
+    const key = `${tripId}::${invoiceNo}`;
+
+    pendingDeliveryResolutions.set(key, {
+        tripId,
+        invoiceNo,
+        status,
+        latitude: gps.latitude,
+        longitude: gps.longitude,
+        photo: extra.photo || null,
+        reason: extra.reason || null,
+    });
+
+    row.dataset.resolved = '1';
+    row.classList.remove('row-pending-delivered', 'row-not-delivered');
+    row.classList.add(status === 'delivered' ? 'row-pending-delivered' : 'row-not-delivered');
+    row.querySelector('.not-delivered-reason')?.classList.add('dc-hidden');
+
+    const actionCell = row.querySelector('.delivery-action-cell');
+    if (actionCell) {
+        actionCell.querySelectorAll('button, input, textarea').forEach((el) => { el.disabled = true; });
+
+        let badge = actionCell.querySelector('.resolution-pending-badge');
+        if (!badge) {
+            badge = document.createElement('div');
+            badge.className = 'resolution-pending-badge';
+            actionCell.prepend(badge);
+        }
+        badge.innerHTML = status === 'delivered'
+            ? '<span class="status-chip status-chip--delivered" tabindex="0" data-tooltip="Marked delivered (unsaved). Tap Change to undo."><i class="fa-solid fa-clock" aria-hidden="true"></i> Unsaved</span>'
+            : '<span class="status-chip status-chip--not-received" tabindex="0" data-tooltip="Marked not received (unsaved). Tap Change to undo."><i class="fa-solid fa-clock" aria-hidden="true"></i> Unsaved</span>';
+
+        let undo = actionCell.querySelector('.resolution-undo');
+        if (!undo) {
+            undo = document.createElement('button');
+            undo.type = 'button';
+            undo.className = 'btn btn-gray resolution-undo';
+            undo.innerHTML = '<i class="fa-solid fa-rotate-left" aria-hidden="true"></i> Change';
+            undo.addEventListener('click', () => unstageDeliveryResolution(key, row));
+            actionCell.append(undo);
+        }
+        undo.disabled = false;
+    }
+
+    checkAllInvoicesResolved();
+}
+
+/** Reverses stageDeliveryResolution() for one row, so the rider can correct a mistake before the final submit. */
+function unstageDeliveryResolution(key, row) {
+    pendingDeliveryResolutions.delete(key);
+    row.classList.remove('row-pending-delivered', 'row-not-delivered');
+    delete row.dataset.resolved;
+
+    const actionCell = row.querySelector('.delivery-action-cell');
+    if (actionCell) {
+        actionCell.querySelectorAll('button, input, textarea').forEach((el) => {
+            if (!el.classList.contains('resolution-undo')) el.disabled = false;
+        });
+        actionCell.querySelector('.resolution-pending-badge')?.remove();
+        actionCell.querySelector('.resolution-undo')?.remove();
+    }
+
+    updateDeliveryButtonStates();
+    if (finalSubmitMode) {
+        finalSubmitMode = false;
+        id('collectionRequiredModal')?.classList.remove('active');
+        id('resumeCollection')?.classList.add('dc-hidden');
+        notice('Invoice reopened. Resolve every invoice again to record the collection.', 'info');
+    }
+}
+
+/** Once every invoice for this stop has been resolved locally, opens the Collection modal and pre-fills it with the confirmed-delivered invoices. */
+async function checkAllInvoicesResolved() {
+    const rows = document.querySelectorAll('#deliveryDetails tr[data-delivery-invoice]');
+    if (!rows.length || finalSubmitMode) return;
+    const allResolved = [...rows].every((row) => row.dataset.resolved === '1');
+    if (!allResolved) return;
+
+    finalSubmitMode = true;
+    collectionAccessGranted = true;
+    collectionInRange = true;
+    id('resumeCollection')?.classList.add('dc-hidden');
+    id('collectionRequiredModal')?.classList.add('active');
+    notice('All invoices for this stop have been processed. Record the collection below to finish this delivery.', 'success');
+
+    const delivered = [...pendingDeliveryResolutions.values()].filter((item) => item.status === 'delivered');
+    const invoiceNumbers = delivered.map((item) => item.invoiceNo);
+    if (invoiceNumbers.length) {
+        try {
+            const data = await post('collection_invoices_batch', {
+                customer: id('selectedCustomer').value,
+                invoice_numbers: JSON.stringify(invoiceNumbers),
+            });
+            (data.items || []).forEach((match) => {
+                invoiceRow({ invoice_no: match.InvoiceNo, amount: Number(match.Balance), delivery_date: match.DeliveryDate, department: match.DEPARTMENT });
+            });
+            const missing = [...(data.not_found || []), ...(data.already_collected || [])];
+            if (missing.length) {
+                notice(`Couldn't auto-add invoice(s) ${missing.join(', ')} to the outstanding balance. Add manually if needed.`, 'error');
+            }
+        } catch (error) {
+            notice(`Couldn't load invoice details from InvoiceList: ${error.message}. Add the confirmed invoice(s) manually below.`, 'error');
+        }
+    }
+    updateCollectionTotals();
+}
+
+/** Final Submit for the "requires collection" flow: saves every staged delivery resolution and the collection together in one request. */
+async function submitDeliveriesWithCollection() {
+    try {
+        if (!collectionInRange || !collectionAccessGranted) throw Error('Open the customer collection details before saving.');
+        if (!pendingDeliveryResolutions.size) throw Error('No delivery confirmations were staged.');
+
+        const invoice = Number(id('invoiceBalance').value);
+        const invoices = selectedInvoices();
+        const payments = [];
+        const splits = [];
+        const form = new FormData();
+
+        [...id('paymentRows').rows].forEach((r, i) => {
+            const type = r.querySelector('.payment-type').value;
+            const amount = Number(r.querySelector('.payment-amount').value || 0);
+            const file = r.querySelector('.payment-file').files[0];
+            const attachmentReference = file ? `payment_${i}` : '';
+            if (amount > 0) {
+                payments.push({ type, bank: r.querySelector('.payment-bank').value.trim(), check: r.querySelector('.payment-check').value.trim(), attachment_reference: attachmentReference, amount });
+                if (file) form.append(`payment_attachment_${attachmentReference}`, file);
+            }
+        });
+        [...id('splitRows').rows].forEach((r, i) => {
+            const category = r.querySelector('.split-category');
+            const amount = Number(r.querySelector('.split-amount').value || 0);
+            const file = r.querySelector('.split-file').files[0];
+            if (amount > 0) {
+                if (!category.value) throw Error('Select a category for every split amount.');
+                if (category.selectedOptions[0].dataset.required === '1' && !file) throw Error('An attachment is required for the selected category.');
+                const attachmentReference = file ? `split_${category.value}_${i}` : '';
+                splits.push({ catid: Number(category.value), amount, reference: r.querySelector('.split-reference').value.trim(), attachment_reference: attachmentReference });
+                if (file) form.append(`split_attachment_${attachmentReference}`, file);
+            }
+        });
+
+        const collected = payments.reduce((s, p) => s + p.amount, 0);
+        const splitTotal = splits.reduce((s, p) => s + p.amount, 0);
+        if (!invoices.length) throw Error('Add at least one invoice before saving.');
+        if (!id('prNumber').value.trim()) throw Error('PR number is required.');
+        if (!payments.length) throw Error('Add a payment amount before saving.');
+        if (invoice - collected - splitTotal > .009) throw Error('Total balance must be zero or an overpayment before saving.');
+
+        const deliveries = [...pendingDeliveryResolutions.values()].map((item, index) => {
+            const entry = {
+                trip_id: item.tripId,
+                invoice_no: item.invoiceNo,
+                status: item.status,
+                latitude: item.latitude,
+                longitude: item.longitude,
+            };
+            if (item.status === 'delivered') {
+                form.append(`delivery_photo_${index}`, item.photo);
+            } else {
+                entry.reason = item.reason;
+            }
+            return entry;
+        });
+
+        form.set('customer', id('selectedCustomer').value);
+        form.set('amount', collected);
+        form.set('split_amount', splitTotal);
+        form.set('payments', JSON.stringify(payments));
+        form.set('splits', JSON.stringify(splits));
+        form.set('invoices', JSON.stringify(invoices));
+        form.set('pr_number', id('prNumber').value.trim());
+        form.set('deliveries', JSON.stringify(deliveries));
+
+        const result = await post('complete_delivery_with_collection', form);
+        id('saveConfirmModal')?.classList.remove('active');
+        id('collectionRequiredModal')?.classList.remove('active');
+        notice(result.message, 'success');
+
+        const next = new URL(window.location.href);
+        next.searchParams.delete('customer');
+        next.searchParams.set('focusCustomer', '1');
+        next.searchParams.set('savedReference', result.reference);
+        window.location.href = next.toString();
+    } catch (error) {
+        notice(error.message, 'error');
+    }
+}
 function updateDeliveryButtonStates(){
     document.querySelectorAll('.confirm-delivery').forEach((button) => {
         if (!locationConfirmedForDelivery) { button.disabled = true; return; }
@@ -426,6 +631,15 @@ async function notDelivered(button){
     const reason = reasonField?.value.trim() || '';
     if (!reason) { notice("Enter a reason before saving.", 'error'); reasonField?.focus(); return; }
     if (!gps) { notice('Waiting for GPS location.', 'error'); return; }
+
+    // Same reasoning as deliver(): customers requiring a Collection stage
+    // every invoice resolution locally until they're all done, then save
+    // everything together with the Collection.
+    if (window.deliveryRequiresCollection) {
+        stageDeliveryResolution(button, 'not_received', { reason });
+        return;
+    }
+
     try {
         button.disabled = true;
         const result = await post('not_delivered', {
@@ -675,7 +889,7 @@ function focusRouteStop(displaySeq){
     const el=marker.getElement();
     if(el){el.classList.add('route-pin--pulse');setTimeout(()=>el.classList.remove('route-pin--pulse'),1500);}
 }
-document.addEventListener('DOMContentLoaded',()=>{initMap();id('customerSearch')?.addEventListener('input',e=>search(e.target.value.trim()));id('customerSearch')?.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();openCustomer();}});id('customerResults')?.addEventListener('dblclick',openCustomer);id('openCustomer')?.addEventListener('click',openCustomer);id('invoiceSearch')?.addEventListener('input',e=>searchInvoices(e.target.value.trim()));id('invoiceSearch')?.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();findInvoice();}});id('addInvoice')?.addEventListener('click',findInvoice);id('addManualInvoiceRow')?.addEventListener('click',manualInvoiceRow);id('confirmLocation')?.addEventListener('click',async()=>{try{if(!gps)throw Error('Waiting for GPS location.');await post('confirm_location',{customer:id('selectedCustomer').value,module:id('moduleName').value,...gps});notice('Location confirmed. You can now save.','success');id('completeTransaction').disabled=false;}catch(e){notice(e.message,'error');}});id('viewMap')?.addEventListener('click',()=>{id('mapModal').classList.add('active');setTimeout(()=>{window.deliveryCollectionMap?.invalidateSize();if(mapFitTarget)window.deliveryCollectionMap?.fitBounds(mapFitTarget,{padding:[40,40]});},150);});id('closeMap')?.addEventListener('click',()=>id('mapModal').classList.remove('active'));id('viewAging')?.addEventListener('click',()=>{id('agingModal')?.classList.add('active');loadAging();});id('closeAging')?.addEventListener('click',()=>id('agingModal').classList.remove('active'));id('viewCollectionDetails')?.addEventListener('click',async()=>{try{if(!collectionInRange||!gps)throw Error('Customer is out of range. Move within 5 m of the customer.');const result=await post('collection_access',{customer:id('selectedCustomer').value,...gps});id('collectionDetails').classList.remove('dc-hidden');collectionAccessGranted=true;updateCollectionTotals();notice(result.access.reason,'success');}catch(e){notice(e.message,'error');}});id('viewDeliveryDetails')?.addEventListener('click',async()=>{try{if(!collectionInRange||!gps)throw Error('Customer is out of range. Move within the allowed radius of the customer.');await post('confirm_location',{customer:id('selectedCustomer').value,module:'delivery',...gps});id('deliveryDetails').classList.remove('dc-hidden');locationConfirmedForDelivery=true;updateDeliveryButtonStates();notice('Location confirmed. Attach a store photo, then confirm each invoice one at a time.','success');}catch(e){notice(e.message,'error');}});document.addEventListener('change',e=>{if(e.target.classList.contains('store-photo-input'))updateDeliveryButtonStates();});id('addPayment')?.addEventListener('click',paymentRow);id('addSplit')?.addEventListener('click',splitRow);document.addEventListener('input',()=>{summary();updateCollectionTotals();});document.addEventListener('click',e=>{if(e.target.classList.contains('remove-row')||e.target.classList.contains('remove-invoice-row')){e.target.closest('tr').remove();refreshInvoiceTotal();}});if(id('paymentRows')){paymentRow();splitRow();summary();updateCollectionTotals();}id('completeTransaction')?.addEventListener('click',showSaveConfirmation);['closeSaveConfirm','cancelSave'].forEach(key=>id(key)?.addEventListener('click',()=>id('saveConfirmModal').classList.remove('active')));id('saveRequirements')?.addEventListener('click',e=>{if(e.target.closest('a'))id('saveConfirmModal').classList.remove('active');});id('confirmSave')?.addEventListener('click',()=>pendingDeliveryAfterCollection?saveCollectionThenDeliver():save());id('closeCollectionRequired')?.addEventListener('click',()=>{id('collectionRequiredModal').classList.remove('active');pendingDeliveryAfterCollection=null;});});
+document.addEventListener('DOMContentLoaded',()=>{initMap();id('customerSearch')?.addEventListener('input',e=>search(e.target.value.trim()));id('customerSearch')?.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();openCustomer();}});id('customerResults')?.addEventListener('dblclick',openCustomer);id('openCustomer')?.addEventListener('click',openCustomer);id('invoiceSearch')?.addEventListener('input',e=>searchInvoices(e.target.value.trim()));id('invoiceSearch')?.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();findInvoice();}});id('addInvoice')?.addEventListener('click',findInvoice);id('addManualInvoiceRow')?.addEventListener('click',manualInvoiceRow);id('confirmLocation')?.addEventListener('click',async()=>{try{if(!gps)throw Error('Waiting for GPS location.');await post('confirm_location',{customer:id('selectedCustomer').value,module:id('moduleName').value,...gps});notice('Location confirmed. You can now save.','success');id('completeTransaction').disabled=false;}catch(e){notice(e.message,'error');}});id('viewMap')?.addEventListener('click',()=>{id('mapModal').classList.add('active');setTimeout(()=>{window.deliveryCollectionMap?.invalidateSize();if(mapFitTarget)window.deliveryCollectionMap?.fitBounds(mapFitTarget,{padding:[40,40]});},150);});id('closeMap')?.addEventListener('click',()=>id('mapModal').classList.remove('active'));id('viewAging')?.addEventListener('click',()=>{id('agingModal')?.classList.add('active');loadAging();});id('closeAging')?.addEventListener('click',()=>id('agingModal').classList.remove('active'));id('viewCollectionDetails')?.addEventListener('click',async()=>{try{if(!collectionInRange||!gps)throw Error('Customer is out of range. Move within 5 m of the customer.');const result=await post('collection_access',{customer:id('selectedCustomer').value,...gps});id('collectionDetails').classList.remove('dc-hidden');collectionAccessGranted=true;updateCollectionTotals();notice(result.access.reason,'success');}catch(e){notice(e.message,'error');}});id('viewDeliveryDetails')?.addEventListener('click',async()=>{try{if(!collectionInRange||!gps)throw Error('Customer is out of range. Move within the allowed radius of the customer.');await post('confirm_location',{customer:id('selectedCustomer').value,module:'delivery',...gps});id('deliveryDetails').classList.remove('dc-hidden');locationConfirmedForDelivery=true;updateDeliveryButtonStates();notice('Location confirmed. Attach a store photo, then confirm each invoice one at a time.','success');}catch(e){notice(e.message,'error');}});document.addEventListener('change',e=>{if(e.target.classList.contains('store-photo-input'))updateDeliveryButtonStates();});id('addPayment')?.addEventListener('click',paymentRow);id('addSplit')?.addEventListener('click',splitRow);document.addEventListener('input',()=>{summary();updateCollectionTotals();});document.addEventListener('click',e=>{if(e.target.classList.contains('remove-row')||e.target.classList.contains('remove-invoice-row')){e.target.closest('tr').remove();refreshInvoiceTotal();}});if(id('paymentRows')){paymentRow();splitRow();summary();updateCollectionTotals();}id('completeTransaction')?.addEventListener('click',showSaveConfirmation);['closeSaveConfirm','cancelSave'].forEach(key=>id(key)?.addEventListener('click',()=>id('saveConfirmModal').classList.remove('active')));id('saveRequirements')?.addEventListener('click',e=>{if(e.target.closest('a'))id('saveConfirmModal').classList.remove('active');});id('confirmSave')?.addEventListener('click',()=>{if(finalSubmitMode)return submitDeliveriesWithCollection();return pendingDeliveryAfterCollection?saveCollectionThenDeliver():save();});id('closeCollectionRequired')?.addEventListener('click',()=>{id('collectionRequiredModal').classList.remove('active');pendingDeliveryAfterCollection=null;if(finalSubmitMode)id('resumeCollection')?.classList.remove('dc-hidden');});id('resumeCollection')?.addEventListener('click',()=>id('collectionRequiredModal')?.classList.add('active'));});
 document.addEventListener('DOMContentLoaded',()=>{
     const params=new URLSearchParams(window.location.search),reference=params.get('savedReference');
     if(reference)notice(`Collection saved successfully. Syntax reference: ${reference}`,'success');
@@ -719,9 +933,12 @@ document.addEventListener('DOMContentLoaded',()=>{
 
     // Deposit Slip upload (Delivery Portal route table): opens a small modal
     // scoped to one Trip + Customer stop; the button itself is only enabled
-    // server-side (see delivery/portal.php) once that stop reads "Delivered".
+    // server-side (see delivery/portal.php) once that stop reads "Delivered"
+    // and the rider is JKAS.
+    let currentDepositSlipButton = null;
     document.querySelectorAll('.deposit-slip-btn').forEach((button) => {
         button.addEventListener('click', async () => {
+            currentDepositSlipButton = button;
             id('depositSlipTripId').value = button.dataset.tripId;
             id('depositSlipCustomerId').value = button.dataset.customerId;
             id('depositSlipTripLabel').textContent = button.dataset.tripId;
@@ -754,6 +971,19 @@ document.addEventListener('DOMContentLoaded',()=>{
             const result = await post('upload_deposit_slip', form);
             id('depositSlipModal')?.classList.remove('active');
             notice(result.message, 'success');
+            // Mark the triggering row's button as uploaded immediately, without a page reload.
+            if (currentDepositSlipButton) {
+                currentDepositSlipButton.classList.remove('btn-gray');
+                currentDepositSlipButton.classList.add('btn-green', 'deposit-slip-btn--uploaded');
+                currentDepositSlipButton.title = 'Deposit slip already uploaded — tap to view or replace it';
+                currentDepositSlipButton.querySelector('i')?.classList.replace('fa-receipt', 'fa-circle-check');
+                if (!currentDepositSlipButton.querySelector('.deposit-slip-uploaded-badge')) {
+                    const uploadedBadge = document.createElement('span');
+                    uploadedBadge.className = 'deposit-slip-uploaded-badge';
+                    uploadedBadge.textContent = 'Uploaded';
+                    currentDepositSlipButton.append(uploadedBadge);
+                }
+            }
         } catch (error) {
             notice(error.message, 'error');
         } finally {

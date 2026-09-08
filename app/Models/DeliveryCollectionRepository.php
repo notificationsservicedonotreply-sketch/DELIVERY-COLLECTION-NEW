@@ -167,24 +167,9 @@ class DeliveryCollectionRepository
 
     public function completeAssignedDelivery(string $userId, string $tripId, string $invoiceNo, string $customerId, float $latitude, float $longitude, array $storePhoto): array
     {
-        if ($latitude < -90 || $latitude > 90 || $longitude < -180 || $longitude > 180) throw new RuntimeException('Invalid GPS coordinates.');
         $this->pdo->beginTransaction();
         try {
-            $update = $this->pdo->prepare("UPDATE I SET I.DeliveredDate = GETDATE(), I.Latitude = :latitude, I.Longitude = :longitude
-                OUTPUT INSERTED.ID
-                FROM TripInvoice I
-                WHERE I.TripID = :trip AND I.InvoiceNo = :invoice AND I.CustomerID = :customer
-                  AND I.DeliveredDate IS NULL AND I.NotDeliveredReason IS NULL
-                  AND EXISTS (SELECT 1 FROM TriplistAssign A WHERE A.USERID = :user AND A.TRIPID = I.TripID)");
-            $update->execute([':latitude' => $latitude, ':longitude' => $longitude, ':trip' => $tripId, ':invoice' => $invoiceNo, ':customer' => $customerId, ':user' => $userId]);
-            $tripInvoiceId = $update->fetchColumn();
-            if ($tripInvoiceId === false) throw new RuntimeException('This invoice is no longer pending or is not assigned to you.');
-
-            // Proof-of-delivery photo, stored the same way collection payment/split
-            // attachments are: on disk under Uploads/, plus a binary copy in
-            // FileAttachment. Referenced by the TripInvoice row's own ID so it can
-            // never collide with a CollectionSyntaxDtl/Category attachment reference.
-            $this->saveDeliveryPhoto((string) $tripInvoiceId, $storePhoto);
+            $this->applyDeliveryConfirmation($userId, $tripId, $invoiceNo, $customerId, $latitude, $longitude, $storePhoto);
 
             $count = $this->pdo->prepare("SELECT COUNT(*) FROM TripInvoice I INNER JOIN TriplistAssign A ON A.TRIPID = I.TRIPID WHERE A.USERID = :user AND I.CUSTOMERID = :customer AND I.DeliveredDate IS NULL AND I.NotDeliveredReason IS NULL");
             $count->execute([':user' => $userId, ':customer' => $customerId]);
@@ -201,6 +186,35 @@ class DeliveryCollectionRepository
     }
 
     /**
+     * Transaction-agnostic core of completeAssignedDelivery(): updates the
+     * TripInvoice row and stores the proof-of-delivery photo, but leaves
+     * transaction management (and the "remaining"/trip-status bookkeeping)
+     * to the caller. Shared by the single-invoice path above and by
+     * saveDeliveriesWithCollection(), which resolves several invoices and
+     * saves a Collection in one all-or-nothing transaction.
+     */
+    private function applyDeliveryConfirmation(string $userId, string $tripId, string $invoiceNo, string $customerId, float $latitude, float $longitude, array $storePhoto): void
+    {
+        if ($latitude < -90 || $latitude > 90 || $longitude < -180 || $longitude > 180) throw new RuntimeException('Invalid GPS coordinates.');
+
+        $update = $this->pdo->prepare("UPDATE I SET I.DeliveredDate = GETDATE(), I.Latitude = :latitude, I.Longitude = :longitude
+            OUTPUT INSERTED.ID
+            FROM TripInvoice I
+            WHERE I.TripID = :trip AND I.InvoiceNo = :invoice AND I.CustomerID = :customer
+              AND I.DeliveredDate IS NULL AND I.NotDeliveredReason IS NULL
+              AND EXISTS (SELECT 1 FROM TriplistAssign A WHERE A.USERID = :user AND A.TRIPID = I.TripID)");
+        $update->execute([':latitude' => $latitude, ':longitude' => $longitude, ':trip' => $tripId, ':invoice' => $invoiceNo, ':customer' => $customerId, ':user' => $userId]);
+        $tripInvoiceId = $update->fetchColumn();
+        if ($tripInvoiceId === false) throw new RuntimeException("Invoice {$invoiceNo} is no longer pending or is not assigned to you.");
+
+        // Proof-of-delivery photo, stored the same way collection payment/split
+        // attachments are: on disk under Uploads/, plus a binary copy in
+        // FileAttachment. Referenced by the TripInvoice row's own ID so it can
+        // never collide with a CollectionSyntaxDtl/Category attachment reference.
+        $this->saveDeliveryPhoto((string) $tripInvoiceId, $storePhoto);
+    }
+
+    /**
      * Records why a scheduled delivery wasn't received (customer absent,
      * store closed, refused, etc.) as an alternative resolution to actually
      * delivering it. Requires the rider's GPS location, same as a real
@@ -210,21 +224,9 @@ class DeliveryCollectionRepository
      */
     public function markDeliveryNotReceived(string $userId, string $tripId, string $invoiceNo, string $customerId, float $latitude, float $longitude, string $reason): array
     {
-        if ($latitude < -90 || $latitude > 90 || $longitude < -180 || $longitude > 180) throw new RuntimeException('Invalid GPS coordinates.');
-        $reason = trim($reason);
-        if ($reason === '') throw new RuntimeException('A reason is required.');
-        if (mb_strlen($reason) > 255) $reason = mb_substr($reason, 0, 255);
-
         $this->pdo->beginTransaction();
         try {
-            $update = $this->pdo->prepare("UPDATE I SET I.NotDeliveredReason = :reason, I.NotDeliveredDate = GETDATE(), I.Latitude = :latitude, I.Longitude = :longitude
-                OUTPUT INSERTED.ID
-                FROM TripInvoice I
-                WHERE I.TripID = :trip AND I.InvoiceNo = :invoice AND I.CustomerID = :customer
-                  AND I.DeliveredDate IS NULL AND I.NotDeliveredReason IS NULL
-                  AND EXISTS (SELECT 1 FROM TriplistAssign A WHERE A.USERID = :user AND A.TRIPID = I.TripID)");
-            $update->execute([':reason' => $reason, ':latitude' => $latitude, ':longitude' => $longitude, ':trip' => $tripId, ':invoice' => $invoiceNo, ':customer' => $customerId, ':user' => $userId]);
-            if ($update->fetchColumn() === false) throw new RuntimeException('This invoice is no longer pending or is not assigned to you.');
+            $this->applyNotDeliveredResolution($userId, $tripId, $invoiceNo, $customerId, $latitude, $longitude, $reason);
 
             $count = $this->pdo->prepare("SELECT COUNT(*) FROM TripInvoice I INNER JOIN TriplistAssign A ON A.TRIPID = I.TRIPID WHERE A.USERID = :user AND I.CUSTOMERID = :customer AND I.DeliveredDate IS NULL AND I.NotDeliveredReason IS NULL");
             $count->execute([':user' => $userId, ':customer' => $customerId]);
@@ -234,6 +236,98 @@ class DeliveryCollectionRepository
 
             $this->pdo->commit();
             return ['remaining' => $remaining];
+        } catch (Throwable $error) {
+            if ($this->pdo->inTransaction()) $this->pdo->rollBack();
+            throw $error;
+        }
+    }
+
+    /**
+     * Transaction-agnostic core of markDeliveryNotReceived() -- see
+     * applyDeliveryConfirmation() for why this split exists.
+     */
+    private function applyNotDeliveredResolution(string $userId, string $tripId, string $invoiceNo, string $customerId, float $latitude, float $longitude, string $reason): void
+    {
+        if ($latitude < -90 || $latitude > 90 || $longitude < -180 || $longitude > 180) throw new RuntimeException('Invalid GPS coordinates.');
+        $reason = trim($reason);
+        if ($reason === '') throw new RuntimeException('A reason is required.');
+        if (mb_strlen($reason) > 255) $reason = mb_substr($reason, 0, 255);
+
+        $update = $this->pdo->prepare("UPDATE I SET I.NotDeliveredReason = :reason, I.NotDeliveredDate = GETDATE(), I.Latitude = :latitude, I.Longitude = :longitude
+            OUTPUT INSERTED.ID
+            FROM TripInvoice I
+            WHERE I.TripID = :trip AND I.InvoiceNo = :invoice AND I.CustomerID = :customer
+              AND I.DeliveredDate IS NULL AND I.NotDeliveredReason IS NULL
+              AND EXISTS (SELECT 1 FROM TriplistAssign A WHERE A.USERID = :user AND A.TRIPID = I.TripID)");
+        $update->execute([':reason' => $reason, ':latitude' => $latitude, ':longitude' => $longitude, ':trip' => $tripId, ':invoice' => $invoiceNo, ':customer' => $customerId, ':user' => $userId]);
+        if ($update->fetchColumn() === false) throw new RuntimeException("Invoice {$invoiceNo} is no longer pending or is not assigned to you.");
+    }
+
+    /**
+     * Delivery Portal "requires collection" flow: every invoice for the stop
+     * is first resolved locally in the browser (delivered / not received --
+     * "temporary only", nothing written to the DB yet). Once every invoice
+     * has been resolved, the rider records the Collection, and this method
+     * writes BOTH the delivery resolutions and the collection in a single
+     * all-or-nothing transaction -- so a problem partway through (e.g. an
+     * invoice that changed state elsewhere, or a bad payment row) leaves
+     * every TripInvoice row untouched instead of confirming some deliveries
+     * without a matching collection.
+     *
+     * $deliveries: list of
+     *   ['trip_id'=>, 'invoice_no'=>, 'customer_id'=>, 'latitude'=>, 'longitude'=>,
+     *    'status'=>'delivered'|'not_received', 'reason'=>? (not_received), 'store_photo'=>? (delivered)]
+     */
+    public function saveDeliveriesWithCollection(
+        string $userId,
+        array $deliveries,
+        $customer,
+        $salesman,
+        $prNumber,
+        $amount,
+        $splitAmount,
+        array $payments,
+        array $splits,
+        array $attachments,
+        array $invoiceNumbers
+    ): array {
+        if (!$deliveries) throw new RuntimeException('No delivery confirmations were provided.');
+
+        $this->pdo->beginTransaction();
+        try {
+            $affectedTrips = [];
+
+            foreach ($deliveries as $delivery) {
+                $tripId = trim((string) ($delivery['trip_id'] ?? ''));
+                $invoiceNo = trim((string) ($delivery['invoice_no'] ?? ''));
+                $customerId = trim((string) ($delivery['customer_id'] ?? $customer));
+                $latitude = (float) ($delivery['latitude'] ?? 0);
+                $longitude = (float) ($delivery['longitude'] ?? 0);
+                $status = (string) ($delivery['status'] ?? '');
+
+                if ($tripId === '' || $invoiceNo === '') throw new RuntimeException('Invalid delivery confirmation data.');
+
+                if ($status === 'delivered') {
+                    $storePhoto = $delivery['store_photo'] ?? null;
+                    if (!is_array($storePhoto)) throw new RuntimeException("A store photo is required for invoice {$invoiceNo}.");
+                    $this->applyDeliveryConfirmation($userId, $tripId, $invoiceNo, $customerId, $latitude, $longitude, $storePhoto);
+                } elseif ($status === 'not_received') {
+                    $this->applyNotDeliveredResolution($userId, $tripId, $invoiceNo, $customerId, $latitude, $longitude, (string) ($delivery['reason'] ?? ''));
+                } else {
+                    throw new RuntimeException("Unknown delivery status for invoice {$invoiceNo}.");
+                }
+
+                $affectedTrips[$tripId] = true;
+            }
+
+            foreach (array_keys($affectedTrips) as $tripId) {
+                $this->syncTripStatus($tripId, $userId);
+            }
+
+            $refId = $this->persistCollectionRecords($customer, $salesman, $prNumber, $amount, $splitAmount, $payments, $splits, $attachments, $invoiceNumbers);
+
+            $this->pdo->commit();
+            return ['reference' => $refId, 'processed' => count($deliveries)];
         } catch (Throwable $error) {
             if ($this->pdo->inTransaction()) $this->pdo->rollBack();
             throw $error;
@@ -280,14 +374,18 @@ class DeliveryCollectionRepository
      * Saves a rider-uploaded deposit slip for one delivery stop (a
      * TripID + CustomerID pair, which may cover several invoices), the same
      * way store-delivery photos are saved: on disk under Uploads/, plus a
-     * binary copy in FileAttachment. Only allowed once every invoice
-     * assigned to that rider for that trip/customer has actually been
-     * delivered (matches the "Deposit Slip" button only being enabled once
-     * the stop's status reads "Delivered") -- re-checked here since the
-     * client-side disabled state is not itself a security boundary.
+     * binary copy in FileAttachment. Only allowed for a JKAS rider once
+     * every invoice assigned to that rider for that trip/customer has been
+     * resolved (delivered OR not received) -- matches the "Deposit Slip"
+     * button's enabled state in delivery/portal.php -- re-checked here since
+     * the client-side disabled state is not itself a security boundary.
      */
     public function saveDepositSlip(string $userId, string $tripId, string $customerId, array $file): void
     {
+        if (!$this->isJkasRider($userId)) {
+            throw new RuntimeException('Deposit slip upload is only available for JKAS riders.');
+        }
+
         $stmt = $this->pdo->prepare("
             SELECT COUNT(*) AS Total,
                    SUM(CASE WHEN I.DeliveredDate IS NOT NULL THEN 1 ELSE 0 END) AS Delivered,
@@ -301,10 +399,11 @@ class DeliveryCollectionRepository
         $total = (int) ($row['Total'] ?? 0);
         $delivered = (int) ($row['Delivered'] ?? 0);
         $notDelivered = (int) ($row['NotDelivered'] ?? 0);
+        $resolved = $delivered + $notDelivered;
 
         if ($total === 0) throw new RuntimeException('This delivery stop was not found or is not assigned to you.');
-        if ($notDelivered > 0 || $delivered < $total) {
-            throw new RuntimeException('A deposit slip can only be uploaded once every invoice for this stop has been delivered.');
+        if ($resolved < $total) {
+            throw new RuntimeException('A deposit slip can only be uploaded once every invoice for this stop has been resolved (delivered or not received).');
         }
 
         $attachRef = 'depositslip_' . $tripId . '_' . $customerId;
@@ -348,7 +447,11 @@ class DeliveryCollectionRepository
                 C.Latitude, C.Longitude,
                 COUNT(*) AS InvoiceCount,
                 SUM(CASE WHEN I.DeliveredDate IS NOT NULL THEN 1 ELSE 0 END) AS DeliveredCount,
-                SUM(CASE WHEN I.NotDeliveredReason IS NOT NULL THEN 1 ELSE 0 END) AS NotDeliveredCount
+                SUM(CASE WHEN I.NotDeliveredReason IS NOT NULL THEN 1 ELSE 0 END) AS NotDeliveredCount,
+                CASE WHEN EXISTS (
+                    SELECT 1 FROM FileAttachment FA
+                    WHERE FA.ATTACH_REFID_DTL = CONCAT('depositslip_', I.TripID, '_', I.CustomerID)
+                ) THEN 1 ELSE 0 END AS HasDepositSlip
             FROM TripInvoice I
             INNER JOIN Customers C ON C.CustomerID = I.CustomerID
             WHERE I.TripID IN ({$placeholders})
@@ -390,6 +493,37 @@ class DeliveryCollectionRepository
             $params[':dbname'] = $dbName;
         }
         $sql .= ' ORDER BY I.INVOICEDATE, I.REFID';
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * Looks up InvoiceList details for a specific list of invoice numbers in
+     * one round trip (used once every TripInvoice row for a stop has been
+     * confirmed delivered, to pre-fill the "Invoices with outstanding
+     * balance" step instead of querying one invoice at a time).
+     */
+    public function collectionInvoicesByNumbers(string $customerCode, array $invoiceNumbers, string $dbName = ''): array
+    {
+        $invoiceNumbers = array_values(array_unique(array_filter(array_map('trim', $invoiceNumbers), fn($v) => $v !== '')));
+        if (!$invoiceNumbers) return [];
+
+        $placeholders = [];
+        $params = [':customer' => trim($customerCode)];
+        foreach ($invoiceNumbers as $i => $invoiceNo) {
+            $key = ":inv{$i}";
+            $placeholders[] = $key;
+            $params[$key] = $invoiceNo;
+        }
+
+        $sql = "SELECT I.REFID AS InvoiceNo, I.REFID AS DrNo, I.BALANCE AS Balance, I.DELIVERYDATE AS DeliveryDate, I.DEPARTMENT, I.DATABASENAME,
+            CASE WHEN EXISTS (SELECT 1 FROM CollectionSyntaxInvDtl C WHERE C.INVOICENO = I.REFID) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS AlreadyCollected
+            FROM InvoiceList I WHERE I.CUSTOMERID = :customer AND I.REFID IN (" . implode(',', $placeholders) . ')';
+        if ($dbName !== '') {
+            $sql .= ' AND I.DATABASENAME = :dbname';
+            $params[':dbname'] = $dbName;
+        }
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($params);
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -480,14 +614,10 @@ class DeliveryCollectionRepository
      */
     public function deliveryRequiresCollection(string $userId, string $customerCode): bool
     {
-        $userId = trim($userId);
         $customerCode = trim($customerCode);
-        if ($userId === '' || $customerCode === '') return false;
+        if (trim($userId) === '' || $customerCode === '') return false;
 
-        $stmt = $this->pdo->prepare('SELECT SType FROM UserList WHERE USERID = :user');
-        $stmt->execute([':user' => $userId]);
-        $sType = $stmt->fetchColumn();
-        $isJkas = is_string($sType) && strcasecmp(trim($sType), 'JKAS') === 0;
+        $isJkas = $this->isJkasRider($userId);
 
         $stmt = $this->pdo->prepare('SELECT SellingType FROM Customers WHERE CustomerID = :customer');
         $stmt->execute([':customer' => $customerCode]);
@@ -495,6 +625,22 @@ class DeliveryCollectionRepository
         $sellingTypeIsNull = $sellingType === false || $sellingType === null || trim((string) $sellingType) === '';
 
         return $isJkas || $sellingTypeIsNull;
+    }
+
+    /**
+     * Whether this rider's UserList.SType is 'JKAS'. This is also the only
+     * rider type allowed to upload a stop's deposit slip -- a distinct rule
+     * from deliveryRequiresCollection() above, which additionally covers
+     * customers with no SellingType set yet.
+     */
+    public function isJkasRider(string $userId): bool
+    {
+        $userId = trim($userId);
+        if ($userId === '') return false;
+        $stmt = $this->pdo->prepare('SELECT SType FROM UserList WHERE USERID = :user');
+        $stmt->execute([':user' => $userId]);
+        $sType = $stmt->fetchColumn();
+        return is_string($sType) && strcasecmp(trim($sType), 'JKAS') === 0;
     }
 
     public function categories()
@@ -788,6 +934,27 @@ class DeliveryCollectionRepository
 
     public function saveCollection($customer, $salesman, $prNumber, $amount, $splitAmount, array $payments, array $splits, array $attachments, array $invoiceNumbers)
     {
+        $this->pdo->beginTransaction();
+        try {
+            $refId = $this->persistCollectionRecords($customer, $salesman, $prNumber, $amount, $splitAmount, $payments, $splits, $attachments, $invoiceNumbers);
+            $this->pdo->commit();
+            return $refId;
+        } catch (Throwable $e) {
+            if ($this->pdo->inTransaction()) $this->pdo->rollBack();
+            throw $e;
+        }
+    }
+
+    /**
+     * Transaction-agnostic core of saveCollection(): validates the requested
+     * invoices/payments/splits and writes CollectionSyntaxHdr/InvDtl/Dtl/
+     * Category/FileAttachment rows, but leaves transaction management to the
+     * caller. Shared by saveCollection() (Collection Portal, standalone) and
+     * saveDeliveriesWithCollection() (Delivery Portal, combined with the
+     * delivery resolutions in the same transaction).
+     */
+    private function persistCollectionRecords($customer, $salesman, $prNumber, $amount, $splitAmount, array $payments, array $splits, array $attachments, array $invoiceNumbers)
+    {
         $requestedInvoices = [];
         foreach ($invoiceNumbers as $invoice) {
             $number = trim((string) (is_array($invoice) ? ($invoice['invoice_no'] ?? '') : $invoice));
@@ -829,11 +996,7 @@ class DeliveryCollectionRepository
 
         $refId = $prNumber . $customer . $salesman;
 
-        $this->pdo->beginTransaction();
-
-        try {
-
-            $header = $this->pdo->prepare("
+        $header = $this->pdo->prepare("
                 INSERT INTO CollectionSyntaxHdr
                 (
                     PRNUMBER,
@@ -1104,20 +1267,9 @@ class DeliveryCollectionRepository
                 $attachment->bindParam(':image', $imageData, PDO::PARAM_LOB, 0, PDO::SQLSRV_ENCODING_BINARY);
                 
                 $attachment->execute();
-            } 
-
-            $this->pdo->commit();
-
-            return $refId;
-
-        } catch (Throwable $e) {
-
-            if ($this->pdo->inTransaction()) {
-                $this->pdo->rollBack();
             }
 
-            throw $e;
-        }
+            return $refId;
     }
 
     private function distanceMeters($lat1, $lng1, $lat2, $lng2)

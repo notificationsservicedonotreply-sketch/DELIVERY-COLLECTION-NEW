@@ -26,6 +26,9 @@ class DeliveryController
         $requiresCollection = $customer
             ? $repo->deliveryRequiresCollection((string) ($_SESSION['userID'] ?? ''), $customerCode)
             : false;
+        // Deposit-slip upload is gated on rider type alone (JKAS), separate
+        // from $requiresCollection above -- see DeliveryCollectionRepository::isJkasRider().
+        $isJkasRider = $repo->isJkasRider((string) ($_SESSION['userID'] ?? ''));
         $categories = $requiresCollection ? $repo->categories() : [];
         // Route/sequence now spans every trip assigned to the rider, not just
         // the first one -- stops are grouped by TripID (in trip order), and
@@ -56,6 +59,7 @@ class DeliveryController
             'route' => $route,
             'address' => $address,
             'requiresCollection' => $requiresCollection,
+            'isJkasRider' => $isJkasRider,
             'categories' => $categories,
         ], ['map', 'delivery-collection', 'status-pill']);
     }

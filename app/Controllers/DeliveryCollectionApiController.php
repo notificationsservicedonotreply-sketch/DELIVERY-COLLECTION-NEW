@@ -34,6 +34,9 @@ class DeliveryCollectionApiController
                 case 'collection_invoices':
                     $this->collectionInvoices($repository);
                     break;
+                case 'collection_invoices_batch':
+                    $this->collectionInvoicesBatch($repository);
+                    break;
                 case 'aging_receivables':
                     $this->agingReceivables($repository);
                     break;
@@ -51,6 +54,9 @@ class DeliveryCollectionApiController
                     break;
                 case 'complete_collection':
                     $this->completeCollection($repository, $userId);
+                    break;
+                case 'complete_delivery_with_collection':
+                    $this->completeDeliveryAndCollection($repository, $userId);
                     break;
                 default:
                     throw new RuntimeException('Unsupported request.');
@@ -200,6 +206,93 @@ class DeliveryCollectionApiController
         echo json_encode(['success' => true, 'message' => 'Collection saved. Syntax reference: ' . $reference, 'reference' => $reference]);
     }
 
+    /**
+     * Delivery Portal "requires collection" flow: the rider resolves every
+     * invoice for the customer locally (delivered / not received --
+     * "temporary only", nothing saved yet). Once every invoice is resolved,
+     * the Collection modal opens (pre-filled with the confirmed-delivered
+     * invoices) and this single action saves BOTH the delivery resolutions
+     * and the collection together, in one all-or-nothing transaction --
+     * see DeliveryCollectionRepository::saveDeliveriesWithCollection().
+     */
+    private function completeDeliveryAndCollection(DeliveryCollectionRepository $repository, string $userId): void
+    {
+        $customer = trim((string) ($_POST['customer'] ?? ''));
+        $this->requireRecentLocation('delivery', $customer);
+
+        $deliveriesRaw = json_decode($_POST['deliveries'] ?? '[]', true);
+        if (!is_array($deliveriesRaw) || !$deliveriesRaw) throw new RuntimeException('No delivery confirmations were provided.');
+
+        $deliveries = [];
+        foreach (array_values($deliveriesRaw) as $index => $entry) {
+            if (!is_array($entry)) throw new RuntimeException('Invalid delivery confirmation data.');
+            $tripId = trim((string) ($entry['trip_id'] ?? ''));
+            $invoiceNo = trim((string) ($entry['invoice_no'] ?? ''));
+            $status = (string) ($entry['status'] ?? '');
+            $latitude = filter_var($entry['latitude'] ?? null, FILTER_VALIDATE_FLOAT);
+            $longitude = filter_var($entry['longitude'] ?? null, FILTER_VALIDATE_FLOAT);
+            if ($tripId === '' || $invoiceNo === '' || $latitude === false || $longitude === false) {
+                throw new RuntimeException('Invalid delivery confirmation data.');
+            }
+
+            $item = [
+                'trip_id' => $tripId,
+                'invoice_no' => $invoiceNo,
+                'customer_id' => $customer,
+                'latitude' => (float) $latitude,
+                'longitude' => (float) $longitude,
+                'status' => $status,
+            ];
+
+            if ($status === 'delivered') {
+                $photo = $this->uploadedImage('delivery_photo_' . $index, 'Delivery');
+                if ($photo === null) throw new RuntimeException("A store photo is required for invoice {$invoiceNo}.");
+                $item['store_photo'] = $photo;
+            } elseif ($status === 'not_received') {
+                $reason = trim((string) ($entry['reason'] ?? ''));
+                if ($reason === '') throw new RuntimeException("Enter a reason why invoice {$invoiceNo} was not received.");
+                $item['reason'] = $reason;
+            } else {
+                throw new RuntimeException('Unknown delivery status.');
+            }
+
+            $deliveries[] = $item;
+        }
+
+        $amount = $this->validAmount('amount');
+        $splitAmount = $this->validAmount('split_amount');
+        $locationLock = $repository->locationLockForUser($userId);
+        if ($repository->collectionLocationRequired($customer, $locationLock)) $this->requireRecentLocation('collection', $customer);
+        $splits = json_decode($_POST['splits'] ?? '[]', true);
+        if (!is_array($splits)) throw new RuntimeException('Invalid split balance data.');
+        $payments = json_decode($_POST['payments'] ?? '[]', true);
+        if (!is_array($payments) || !$payments) throw new RuntimeException('Add at least one payment row.');
+        $invoices = json_decode($_POST['invoices'] ?? '[]', true);
+        if (!is_array($invoices) || !$invoices) throw new RuntimeException('Search for and select at least one outstanding invoice.');
+        $attachments = $this->uploadedAttachments();
+
+        $result = $repository->saveDeliveriesWithCollection(
+            $userId,
+            $deliveries,
+            $customer,
+            (string) ($_SESSION['SALESMANID'] ?? $userId),
+            trim((string) ($_POST['pr_number'] ?? '')),
+            $amount,
+            $splitAmount,
+            $payments,
+            $splits,
+            $attachments,
+            $invoices
+        );
+
+        echo json_encode([
+            'success' => true,
+            'message' => 'Delivery and collection saved. Syntax reference: ' . $result['reference'],
+            'reference' => $result['reference'],
+            'processed' => $result['processed'],
+        ]);
+    }
+
     private function collectionInvoices(DeliveryCollectionRepository $repository): void
     {
         $customer = trim((string) ($_POST['customer'] ?? ''));
@@ -211,6 +304,45 @@ class DeliveryCollectionApiController
         $dbName = (string) ($_SESSION['DATABASENAME'] ?? '');
         $items = $alreadyCollected ? [] : $repository->searchCollectionInvoices($customer, $query, $dbName);
         echo json_encode(['success' => true, 'items' => $items, 'already_collected' => $alreadyCollected]);
+    }
+
+    /**
+     * Looks up InvoiceList details for every invoice_no supplied at once
+     * (used right after all TripInvoice rows for a stop are confirmed
+     * delivered, to pre-fill "Invoices with outstanding balance" without
+     * one AJAX round trip per invoice).
+     */
+    private function collectionInvoicesBatch(DeliveryCollectionRepository $repository): void
+    {
+        $customer = trim((string) ($_POST['customer'] ?? ''));
+        if ($customer === '') throw new RuntimeException('Select a customer first.');
+
+        $raw = (string) ($_POST['invoice_numbers'] ?? '[]');
+        $invoiceNumbers = json_decode($raw, true);
+        if (!is_array($invoiceNumbers)) throw new RuntimeException('Invalid invoice list.');
+        $invoiceNumbers = array_values(array_unique(array_filter(array_map('strval', $invoiceNumbers), fn($v) => trim($v) !== '')));
+        if (!$invoiceNumbers) {
+            echo json_encode(['success' => true, 'items' => [], 'not_found' => []]);
+            return;
+        }
+
+        $dbName = (string) ($_SESSION['DATABASENAME'] ?? '');
+        $found = $repository->collectionInvoicesByNumbers($customer, $invoiceNumbers, $dbName);
+
+        // Already-collected invoices must never be offered again, same rule
+        // as the single-invoice search.
+        $items = array_values(array_filter($found, fn($row) => !$row['AlreadyCollected']));
+        $alreadyCollected = array_values(array_filter($found, fn($row) => $row['AlreadyCollected']));
+
+        $foundNumbers = array_map(fn($row) => (string) $row['InvoiceNo'], $found);
+        $notFound = array_values(array_diff($invoiceNumbers, $foundNumbers));
+
+        echo json_encode([
+            'success' => true,
+            'items' => $items,
+            'already_collected' => array_map(fn($row) => (string) $row['InvoiceNo'], $alreadyCollected),
+            'not_found' => $notFound,
+        ]);
     }
 
     private function agingReceivables(DeliveryCollectionRepository $repository): void
