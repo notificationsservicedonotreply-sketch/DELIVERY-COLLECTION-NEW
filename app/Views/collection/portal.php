@@ -293,7 +293,7 @@
                             <thead>
                                 <tr>
                                     <th>Date</th>
-                                    <th>DueDate</th>
+                                    <th>Due Date</th>
                                     <th>RefID</th>
                                     <th>Salesman</th>
                                     <th>Current</th>

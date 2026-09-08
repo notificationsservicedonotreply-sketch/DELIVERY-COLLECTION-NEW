@@ -14,6 +14,8 @@
         document.getElementById('userName').value = user?.NAME || '';
         document.getElementById('salesmanId').value = user?.SALESMANID || '';
         document.getElementById('imei').value = user?.IMEI || '';
+        document.getElementById('dbName').value = user?.DBNAME || '';
+        document.getElementById('sType').value = user?.SType || '';
         document.getElementById('canDelivery').checked = Boolean(Number(user?.CanDelivery));
         document.getElementById('canCollection').checked = Boolean(Number(user?.CanCollection));
         document.getElementById('canTransactions').checked = Boolean(Number(user?.CanTransactions));

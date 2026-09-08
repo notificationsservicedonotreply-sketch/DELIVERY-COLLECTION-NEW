@@ -12,7 +12,7 @@ class UserManagementRepository
 
     public function users(): array
     {
-        $statement = $this->pdo->query("SELECT U.PK, U.USERID, U.IMEI, U.NAME, U.SALESMANID, U.LocationLock,
+        $statement = $this->pdo->query("SELECT U.PK, U.USERID, U.IMEI, U.NAME, U.SALESMANID, U.LocationLock, U.DBNAME, U.SType,
             ISNULL(MAX(CASE WHEN A.MODULE = 'Delivery-Portal' AND A.ACCESS = 1 THEN 1 ELSE 0 END), 0) AS CanDelivery,
             ISNULL(MAX(CASE WHEN A.MODULE = 'Collection-Portal' AND A.ACCESS = 1 THEN 1 ELSE 0 END), 0) AS CanCollection,
             ISNULL(MAX(CASE WHEN A.MODULE = 'Collection-Transactions' AND A.ACCESS = 1 THEN 1 ELSE 0 END), 0) AS CanTransactions,
@@ -22,7 +22,7 @@ class UserManagementRepository
             ISNULL(MAX(CASE WHEN A.MODULE = 'Trip-List-Assign' AND A.ACCESS = 1 THEN 1 ELSE 0 END), 0) AS CanTriplistAssign,
             ISNULL(MAX(CASE WHEN A.MODULE = 'Customer-Profile' AND A.ACCESS = 1 THEN 1 ELSE 0 END), 0) AS CanCustomerProfile
             FROM UserList U LEFT JOIN UserAccess A ON A.USERID = U.USERID
-            GROUP BY U.PK, U.USERID, U.IMEI, U.NAME, U.SALESMANID, U.LocationLock
+            GROUP BY U.PK, U.USERID, U.IMEI, U.NAME, U.SALESMANID, U.LocationLock, U.DBNAME, U.SType
             ORDER BY U.USERID");
         return $statement->fetchAll(PDO::FETCH_ASSOC);
     }
@@ -35,6 +35,8 @@ class UserManagementRepository
         $salesmanId = trim((string) ($input['salesman_id'] ?? ''));
         $password = (string) ($input['password'] ?? '');
         $imei = trim((string) ($input['imei'] ?? ''));
+        $dbName = trim((string) ($input['dbname'] ?? ''));
+        $sType = trim((string) ($input['stype'] ?? ''));
         $locationLock = !empty($input['location_lock']) ? 1 : 0;
         if ($userId === '' || $name === '' || $salesmanId === '') throw new RuntimeException('User ID, name, and salesman ID are required.');
         if (!$pk && strlen($password) < 10) throw new RuntimeException('A new user password must contain at least 10 characters.');
@@ -45,6 +47,8 @@ class UserManagementRepository
         $this->assertFitsColumn('NAME', $name, 'Full name');
         $this->assertFitsColumn('SALESMANID', $salesmanId, 'Salesman ID');
         $this->assertFitsColumn('IMEI', $imei, 'IMEI / device ID');
+        $this->assertFitsColumn('DBNAME', $dbName, 'Database name');
+        $this->assertFitsColumn('SType', $sType, 'Salesman type');
 
         $this->pdo->beginTransaction();
         try {
@@ -53,8 +57,8 @@ class UserManagementRepository
                 $existingUser->execute([':pk' => $pk]);
                 $previousUserId = (string) $existingUser->fetchColumn();
                 if ($previousUserId === '') throw new RuntimeException('User was not found.');
-                $sql = 'UPDATE UserList SET USERID = :user, NAME = :name, SALESMANID = :salesman, IMEI = :imei, LocationLock = :lock';
-                $params = [':user' => $userId, ':name' => $name, ':salesman' => $salesmanId, ':imei' => $imei, ':lock' => $locationLock, ':pk' => $pk];
+                $sql = 'UPDATE UserList SET USERID = :user, NAME = :name, SALESMANID = :salesman, IMEI = :imei, LocationLock = :lock, DBNAME = :dbname, SType = :stype';
+                $params = [':user' => $userId, ':name' => $name, ':salesman' => $salesmanId, ':imei' => $imei, ':lock' => $locationLock, ':dbname' => $dbName, ':stype' => $sType, ':pk' => $pk];
                 if ($password !== '') {
                     if (strlen($password) < 10) throw new RuntimeException('Password must contain at least 10 characters.');
                     $hash = password_hash($password, PASSWORD_DEFAULT);
@@ -72,8 +76,8 @@ class UserManagementRepository
             } else {
                 $hash = password_hash($password, PASSWORD_DEFAULT);
                 $this->assertFitsColumn('PASSWORD', $hash, 'Password hash', 'Run database/user_roles_permissions.sql to update UserList.PASSWORD to varchar(255).');
-                $statement = $this->pdo->prepare('INSERT INTO UserList (USERID, PASSWORD, IMEI, NAME, SALESMANID, LocationLock) VALUES (:user, :password, :imei, :name, :salesman, :lock)');
-                $statement->execute([':user' => $userId, ':password' => $hash, ':imei' => $imei, ':name' => $name, ':salesman' => $salesmanId, ':lock' => $locationLock]);
+                $statement = $this->pdo->prepare('INSERT INTO UserList (USERID, PASSWORD, IMEI, NAME, SALESMANID, LocationLock, DBNAME, SType) VALUES (:user, :password, :imei, :name, :salesman, :lock, :dbname, :stype)');
+                $statement->execute([':user' => $userId, ':password' => $hash, ':imei' => $imei, ':name' => $name, ':salesman' => $salesmanId, ':lock' => $locationLock, ':dbname' => $dbName, ':stype' => $sType]);
             }
             $this->saveModuleAccess($userId, $input);
             $this->pdo->commit();

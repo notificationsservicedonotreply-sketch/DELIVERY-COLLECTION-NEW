@@ -212,7 +212,7 @@ function updateCollectionRange(distance, allowed, radius) {
 }
 function paymentRow(){const tr=document.createElement('tr');tr.innerHTML=`<td><select class="input payment-type"><option>Cash</option><option>PDC</option></select></td><td><input class="input payment-bank" disabled></td><td><input class="input payment-check" disabled></td><td><input class="payment-file" type="file" accept="image/jpeg,image/png,image/gif,image/webp" disabled></td><td><input class="input payment-amount" type="number" min="0" step=".01" value="0"></td><td><button class="btn btn-red remove-row"><i class="fa-solid fa-trash" aria-hidden="true"></i> Remove</button></td>`;tr.querySelector('.payment-type').addEventListener('change',e=>{const enabled=e.target.value==='PDC';tr.querySelectorAll('.payment-bank,.payment-check,.payment-file').forEach(field=>{field.disabled=!enabled;if(!enabled&&field.type!=='file')field.value='';});if(!enabled)tr.querySelector('.payment-file').value='';});id('paymentRows').append(tr);}
 function splitRow(){const options=(window.collectionCategories||[]).map(c=>`<option value="${c.catid}" data-required="${c.RequiresAttachment?1:0}">${c.CategoryName}${c.RequiresAttachment?' *':''}</option>`).join('');const tr=document.createElement('tr');tr.innerHTML=`<td><select class="input split-category"><option value="">Select category</option>${options}</select></td><td><input class="input split-amount" type="number" min="0" step=".01" value="0"></td><td><input class="input split-reference"></td><td><input class="split-file" type="file" accept="image/jpeg,image/png,image/gif,image/webp"></td><td><button class="btn btn-red remove-row"><i class="fa-solid fa-trash" aria-hidden="true"></i> Remove</button></td>`;id('splitRows').append(tr);}
-function money(value){return Number(value||0).toFixed(2);}
+function money(value){return Number(value||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
 /** Populates the Aging of Accounts Receivable modal for the current customer, from InvoiceList via the aging_receivables action. */
 async function loadAging(){
     const tbody = id('agingRows');
@@ -229,7 +229,7 @@ async function loadAging(){
                 const tr = document.createElement('tr');
                 const cells = [
                     ['Date', item.date],
-                    ['DueDate', item.due_date],
+                    ['Due Date', item.due_date],
                     ['RefID', item.refid],
                     ['Salesman', item.salesman],
                     ['Current', item.bucket === 'current' ? money(item.balance) : ''],
@@ -616,11 +616,21 @@ async function submitDeliveriesWithCollection() {
 }
 function updateDeliveryButtonStates(){
     document.querySelectorAll('.confirm-delivery').forEach((button) => {
+        const row = button.closest('tr');
+        // Rows already confirmed/marked-not-received (staged locally while
+        // waiting on a required Collection, see stageDeliveryResolution())
+        // must stay locked. Without this check, attaching a photo to *any
+        // other* row re-runs this function for every button on the page and
+        // re-enables an already-resolved row, since its file input still
+        // holds the photo it was confirmed with.
+        if (row?.dataset.resolved === '1') { button.disabled = true; return; }
         if (!locationConfirmedForDelivery) { button.disabled = true; return; }
-        const hasPhoto = Boolean(button.closest('tr')?.querySelector('.store-photo-input')?.files?.length);
+        const hasPhoto = Boolean(row?.querySelector('.store-photo-input')?.files?.length);
         button.disabled = !hasPhoto;
     });
     document.querySelectorAll('.not-delivered-toggle').forEach((button) => {
+        const row = button.closest('tr');
+        if (row?.dataset.resolved === '1') { button.disabled = true; return; }
         button.disabled = !locationConfirmedForDelivery;
     });
 }

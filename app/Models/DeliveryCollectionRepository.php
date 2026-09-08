@@ -543,11 +543,15 @@ class DeliveryCollectionRepository
      * InvoiceList has no due-date column, so the due date is assumed to be
      * standard Net 30 terms (InvoiceDate + 30 days). Update this if the
      * business has a real payment-terms source to read from instead.
+     *
+     * The displayed "Date" column uses DeliveryDate when it is present and
+     * later than InvoiceDate (a late delivery), otherwise it falls back to
+     * InvoiceDate.
      */
     public function agingReceivables(string $customerCode): array
     {
         $stmt = $this->pdo->prepare(
-            "SELECT REFID, INVOICEDATE, SALESMANID, BALANCE
+            "SELECT REFID, INVOICEDATE, DELIVERYDATE, SALESMANID, BALANCE
              FROM InvoiceList
              WHERE CUSTOMERID = :customer AND BALANCE > 0
              ORDER BY INVOICEDATE, REFID"
@@ -561,6 +565,17 @@ class DeliveryCollectionRepository
 
         foreach ($rows as $row) {
             $invoiceDate = new DateTimeImmutable((string) $row['INVOICEDATE']);
+
+            // DeliveryDate can be blank/null, and when a delivery is late it
+            // can also fall after the invoice date. Use DeliveryDate only
+            // when it is present and later than InvoiceDate; otherwise fall
+            // back to InvoiceDate.
+            $deliveryDateRaw = $row['DELIVERYDATE'] ?? null;
+            $deliveryDate = $deliveryDateRaw !== null && trim((string) $deliveryDateRaw) !== ''
+                ? new DateTimeImmutable((string) $deliveryDateRaw)
+                : null;
+            $effectiveDate = ($deliveryDate !== null && $deliveryDate > $invoiceDate) ? $deliveryDate : $invoiceDate;
+
             $dueDate = $invoiceDate->modify('+30 days'); // Net 30 assumption -- see method doc comment.
             $daysPastDue = (int) floor(($today->getTimestamp() - $dueDate->getTimestamp()) / 86400);
             $balance = (float) $row['BALANCE'];
@@ -583,7 +598,7 @@ class DeliveryCollectionRepository
 
             $items[] = [
                 'refid' => (string) $row['REFID'],
-                'date' => $invoiceDate->format('m/d/Y'),
+                'date' => $effectiveDate->format('m/d/Y'),
                 'due_date' => $dueDate->format('m/d/Y'),
                 'salesman' => (string) $row['SALESMANID'],
                 'balance' => $balance,

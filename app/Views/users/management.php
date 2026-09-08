@@ -30,6 +30,8 @@
                         <th data-sortable>User ID</th>
                         <th data-sortable>Name</th>
                         <th data-sortable>Salesman ID</th>
+                        <th data-sortable>DB Name</th>
+                        <th data-sortable>SType</th>
                         <th data-sortable>Location lock</th>
                         <th>Delivery</th>
                         <th>Collection</th>
@@ -49,6 +51,8 @@
                             <td data-label="User ID"><strong><?= htmlspecialchars($user['USERID']) ?></strong></td>
                             <td data-label="Name"><?= htmlspecialchars($user['NAME']) ?></td>
                             <td data-label="Salesman ID"><?= htmlspecialchars($user['SALESMANID']) ?></td>
+                            <td data-label="DB Name"><?= htmlspecialchars((string) ($user['DBNAME'] ?? '')) ?></td>
+                            <td data-label="SType"><?= htmlspecialchars((string) ($user['SType'] ?? '')) ?></td>
                             <td data-label="Location lock"><span class="status-pill <?= !empty($user['LocationLock']) ? 'status-pill--on' : 'status-pill--off' ?>"><?= !empty($user['LocationLock']) ? 'Required' : 'Off' ?></span></td>
                             <td><?= !empty($user['CanDelivery']) ? '✓' : '—' ?></td>
                             <td><?= !empty($user['CanCollection']) ? '✓' : '—' ?></td>
@@ -140,6 +144,26 @@
                             class="input"
                             name="imei"
                             id="imei"
+                            maxlength="50"
+                        >
+                    </label>
+
+                    <label>
+                        DB Name
+                        <input
+                            class="input"
+                            name="dbname"
+                            id="dbName"
+                            maxlength="50"
+                        >
+                    </label>
+
+                    <label>
+                        SType
+                        <input
+                            class="input"
+                            name="stype"
+                            id="sType"
                             maxlength="50"
                         >
                     </label>

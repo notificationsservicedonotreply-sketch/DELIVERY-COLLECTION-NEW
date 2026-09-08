@@ -35,7 +35,44 @@
             <button type="button" class="btn btn-outline-blue" data-pwa-install>
                 <i class="fa-solid fa-mobile-screen-button" aria-hidden="true"></i> Install on this device
             </button>
-            <p id="pwaInstallHint" class="form-help">Open this page on the phone or tablet you want to use, then tap Install.</p>
+            <p id="pwaInstallHint" class="form-help">Open this page on the phone, tablet, or computer you want to use, then tap Install.</p>
+            <p id="pwaSecurityNotice" class="form-help pwa-security-notice" style="display:none"></p>
+
+            <!--
+                Chrome/Edge only fire the one-tap install button after their
+                own engagement heuristics are met, and suppress it for a
+                while after a prior dismissal -- no website can force that
+                prompt to appear. So instead of leaving people stuck when
+                the button above says "not available right now", show the
+                manual steps for every platform up front, always visible.
+            -->
+            <div id="pwaManualSteps" class="pwa-manual-steps">
+                <div class="pwa-manual-group">
+                    <div class="pwa-manual-title"><i class="fa-brands fa-android" aria-hidden="true"></i> Android (Chrome)</div>
+                    <ol>
+                        <li>Tap the <strong>&#8942;</strong> menu (top right of the browser).</li>
+                        <li>Tap <strong>"Add to Home screen"</strong> or <strong>"Install app"</strong>.</li>
+                        <li>Confirm by tapping <strong>Install</strong>.</li>
+                    </ol>
+                </div>
+                <div class="pwa-manual-group">
+                    <div class="pwa-manual-title"><i class="fa-brands fa-apple" aria-hidden="true"></i> iPhone / iPad (Safari)</div>
+                    <ol>
+                        <li>Tap the <strong>Share</strong> icon (square with an arrow) in the toolbar.</li>
+                        <li>Scroll down and tap <strong>"Add to Home Screen"</strong>.</li>
+                        <li>Tap <strong>Add</strong> in the top right.</li>
+                    </ol>
+                    <small class="form-help">Must be opened in Safari &mdash; Chrome on iOS cannot install to the Home Screen.</small>
+                </div>
+                <div class="pwa-manual-group">
+                    <div class="pwa-manual-title"><i class="fa-solid fa-desktop" aria-hidden="true"></i> Desktop (Chrome / Edge)</div>
+                    <ol>
+                        <li>Look for the install icon <strong>&#8853;</strong> at the right side of the address bar.</li>
+                        <li>If you don't see it, click the <strong>&#8942;</strong> menu &rarr; <strong>"Install MARS Delivery &amp; Collection..."</strong> (Chrome) or <strong>"Apps" &rarr; "Install this site as an app"</strong> (Edge).</li>
+                        <li>Confirm by clicking <strong>Install</strong>.</li>
+                    </ol>
+                </div>
+            </div>
 
             <div class="footer-actions settings-save-row">
                 <button type="button" class="btn btn-green" id="saveDeviceSettings">
@@ -131,6 +168,16 @@
     .settings-save-row{margin-top:16px}
     .btn-outline-blue{background:#fff;color:#0d6efd;border:1px solid #0d6efd;font-weight:600}
     .btn-outline-blue.btn-installed{background:#eafaf1;color:#198754;border:1px solid #b7e4c7;cursor:default}
+
+    .pwa-manual-steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;margin-top:16px}
+    .pwa-manual-group{background:#faf5f6;border:1px solid #ead7d9;border-radius:10px;padding:12px 14px}
+    .pwa-manual-title{font-weight:700;color:#8b1621;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+    .pwa-manual-group ol{margin:0;padding-left:18px}
+    .pwa-manual-group li{margin-bottom:4px;font-size:13.5px;line-height:1.4}
+    .pwa-manual-group li:last-child{margin-bottom:0}
+    .pwa-manual-group small{display:block;margin-top:8px}
+    .pwa-security-notice{background:#fff4e5;border:1px solid #f3d29b;border-radius:8px;padding:10px 12px;margin-top:10px;color:#7a4a00 !important}
+    .pwa-security-notice code{background:#fff;border:1px solid #eadfca;border-radius:4px;padding:1px 5px;font-size:12.5px}
 
     /* Tabs -- self-contained here rather than borrowed from another page's
        stylesheet, so this page can't be affected by another file's load
