@@ -14,6 +14,7 @@ $scriptMap = [
     'dashboard' => ['assets/dashboard.js'],
     'user-management' => ['assets/user-management.js'],
     'trip-list-assign' => ['assets/trip-list-assign.js'],
+    'customer-profile' => ['assets/customer-profile.js'],
     'attachment-viewer' => ['assets/attachment-viewer.js'],
 ];
 $toLoad = ['assets/jquery-3.7.1.min.js'];

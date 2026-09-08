@@ -50,6 +50,12 @@ $styleMap = [
     // extra unused script to download and parse.
     'status-pill' => ['assets/user-management.css'],
     'user-management' => ['assets/user-management.css'],
+    // Trip List Assign and Customer Profile both use .status-pill and the
+    // shared .user-management-table/.user-modal-content classes but have no
+    // use for user-management.js's Add/Edit User modal wiring -- so they
+    // request the CSS via these keys instead of pulling in the JS bundle.
+    'trip-list-assign' => ['assets/user-management.css'],
+    'customer-profile' => ['assets/user-management.css'],
 ];
 $stylesToLoad = [];
 foreach ($pageScripts as $key) {

@@ -106,12 +106,15 @@ class SystemSettingsRepository
                 TextValue = :textValue,
                 UpdatedAt = SYSUTCDATETIME()
             WHEN NOT MATCHED THEN INSERT (SettingKey, DecimalValue, TextValue, UpdatedAt)
-            VALUES (:key, :decimalValue, :textValue, SYSUTCDATETIME());
+            VALUES (:key2, :decimalValue2, :textValue2, SYSUTCDATETIME());
         ');
         $stmt->execute([
             ':key' => $key,
             ':decimalValue' => $decimalValue,
             ':textValue' => $textValue,
+            ':key2' => $key,
+            ':decimalValue2' => $decimalValue,
+            ':textValue2' => $textValue,
         ]);
     }
 }

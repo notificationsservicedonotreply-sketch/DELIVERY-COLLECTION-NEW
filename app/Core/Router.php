@@ -23,6 +23,7 @@ final class Router
         'Dashboard' => [DashboardController::class, 'index', null, null],
         'Delivery-Portal' => [DeliveryController::class, 'portal', 'Delivery-Portal', null],
         'Trip-List-Assign' => [TripListAssignController::class, 'index', 'Trip-List-Assign', null],
+        'Customer-Profile' => [CustomerProfileController::class, 'index', 'Customer-Profile', null],
         'Delivery-Transactions' => [DeliveryController::class, 'transactions', null, 'canAccessDeliveryTransactions'],
         'Delivery-Transaction-Details' => [DeliveryController::class, 'transactionDetail', null, 'canAccessDeliveryTransactions'],
         'Collection-Portal' => [CollectionController::class, 'portal', 'Collection-Portal', null],

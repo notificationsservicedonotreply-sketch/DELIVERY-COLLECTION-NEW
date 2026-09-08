@@ -38,6 +38,7 @@
                         <th>Delivery transactions</th>
                         <th>Delivery transactions administrator</th>
                         <th>Trip list assign</th>
+                        <th>Customer profile</th>
                         <th>Action</th>
                     </tr>
                 </thead>
@@ -56,6 +57,7 @@
                             <td data-label="Delivery transactions"><?= !empty($user['CanDeliveryTransactions']) ? '✓' : '—' ?></td>
                             <td data-label="Delivery transactions administrator"><?= !empty($user['CanManageDeliveryTransactions']) ? '✓' : '—' ?></td>
                             <td data-label="Trip list assign"><?= !empty($user['CanTriplistAssign']) ? '✓' : '—' ?></td>
+                            <td data-label="Customer profile"><?= !empty($user['CanCustomerProfile']) ? '✓' : '—' ?></td>
                             <td data-label="Actions">
                                 <div class="user-action-buttons">
                                     <button type="button" class="btn btn-blue edit-user"><i class="fa-solid fa-pen"></i><span>Edit</span></button>
@@ -227,6 +229,15 @@
                                 id="canTriplistAssign"
                             >
                             <span>Trip list assign <small>Can view and manage the Trip List Assign menu</small></span>
+                        </label>
+
+                        <label class="permission-option">
+                            <input
+                                type="checkbox"
+                                name="can_customer_profile"
+                                id="canCustomerProfile"
+                            >
+                            <span>Customer profile <small>Can view and manage the Customer Profile menu</small></span>
                         </label>
 
                         <label class="permission-option">

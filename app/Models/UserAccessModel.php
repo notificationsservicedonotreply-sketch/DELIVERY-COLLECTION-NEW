@@ -35,7 +35,7 @@ class UserAccessModel
         $this->lastError = '';
 
         $stmt = $this->pdo->prepare(
-            'SELECT PK, USERID, PASSWORD, IMEI, NAME, SALESMANID, LocationLock, DATABASENAME FROM UserList WHERE USERID = :userID'
+            'SELECT PK, USERID, PASSWORD, IMEI, NAME, SALESMANID, LocationLock, DBNAME FROM UserList WHERE USERID = :userID'
         );
         $stmt->execute([':userID' => $userID]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -58,7 +58,7 @@ class UserAccessModel
         $_SESSION['IMEI'] = trim((string) ($user['IMEI'] ?? ''));
         $_SESSION['LocationLock'] = $user['LocationLock'];
         $_SESSION['SALESMANID'] = $user['SALESMANID'];
-        $_SESSION['DATABASENAME'] = trim((string) ($user['DATABASENAME'] ?? ''));
+        $_SESSION['DATABASENAME'] = trim((string) ($user['DBNAME'] ?? ''));
         $_SESSION['login'] = '1';
         $_SESSION['last_activity'] = time();
         $_SESSION['moduleAccess'] = $this->moduleAccess((string) $user['USERID']);

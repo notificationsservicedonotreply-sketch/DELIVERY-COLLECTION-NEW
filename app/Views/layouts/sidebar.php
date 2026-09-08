@@ -37,6 +37,12 @@
         </a>
         <?php endif; ?>
 
+        <?php if (hasModuleAccess('Customer-Profile')): ?>
+        <a href="<?= Router::url('Customer-Profile') ?>">
+            <i class="fa-solid fa-address-card" aria-hidden="true"></i> Customer Profile
+        </a>
+        <?php endif; ?>
+
         <?php if (hasModuleAccess('User-Management')): ?>
         <a href="<?= Router::url('User-Management') ?>">
             <i class="fa-solid fa-users-gear" aria-hidden="true"></i> User Management
