@@ -1064,6 +1064,29 @@ class DeliveryCollectionRepository
      */
     private function persistCollectionRecords($customer, $salesman, $prNumber, $amount, $splitAmount, array $payments, array $splits, array $attachments, array $invoiceNumbers)
     {
+        if (trim((string) $prNumber) === '') throw new RuntimeException('PR number is required.');
+
+        // Idempotency guard for offline replay: SYNTAXREFERENCE is
+        // deterministic (PR number + customer + salesman), so the same
+        // collection queued in the offline outbox can only ever resolve to
+        // one reference. This protects against two situations that are
+        // otherwise indistinguishable from a genuine new collection:
+        //   1. A double-tap "Save" while offline queues the same collection
+        //      twice in the outbox, and both entries get replayed on sync.
+        //   2. A single outbox entry's save succeeds on the server but the
+        //      success response never makes it back to the browser (e.g.
+        //      connection drops mid-response) -- the item stays queued and
+        //      gets replayed again on the next sync.
+        // Rather than silently creating a duplicate CollectionSyntaxHdr (and
+        // double-counting the payment), an existing reference is treated as
+        // "already synced" and returned as-is with no new writes.
+        $refId = $prNumber . $customer . $salesman;
+        $existing = $this->pdo->prepare('SELECT SYNTAXREFERENCE FROM CollectionSyntaxHdr WHERE SYNTAXREFERENCE = :ref');
+        $existing->execute([':ref' => $refId]);
+        if ($existing->fetchColumn() !== false) {
+            return $refId;
+        }
+
         $requestedInvoices = [];
         foreach ($invoiceNumbers as $invoice) {
             $number = trim((string) (is_array($invoice) ? ($invoice['invoice_no'] ?? '') : $invoice));
@@ -1100,10 +1123,6 @@ class DeliveryCollectionRepository
         if (!$invoices) throw new RuntimeException('There are no outstanding invoices for this customer.');
         if (abs($paymentTotal - $amount) > 0.009 || abs($categoryTotal - $splitAmount) > 0.009) throw new RuntimeException('Collection totals do not match the entered rows.');
         if (($amount + $splitAmount) < $balance - 0.009) throw new RuntimeException('Collection plus split balance must cover the outstanding invoice balance.');
-        if (trim($prNumber) === '') throw new RuntimeException('PR number is required.');
-
-
-        $refId = $prNumber . $customer . $salesman;
 
         $header = $this->pdo->prepare("
                 INSERT INTO CollectionSyntaxHdr
