@@ -12,6 +12,10 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="MARS DC">
 <script>window.PWA_BASE_PREFIX = '../';</script>
+<!-- Scopes the offline IndexedDB store to this user (see offline-core.js);
+     never used for authentication itself, only for local cache isolation
+     on shared devices. -->
+<script>window.MARS_USER_ID = <?= json_encode((string) ($_SESSION['userID'] ?? '')) ?>;</script>
 
 <title>MARS COLLECTION AND DELIVERY SYSTEM</title>
 
@@ -72,6 +76,7 @@ foreach ($stylesToLoad as $style):
 <link rel="stylesheet" href="<?= adminAsset('assets/dashboard_card.css') ?>">
 <link rel="stylesheet" href="<?= adminAsset('assets/delivery-collection.css') ?>">
 <link rel="stylesheet" href="<?= adminAsset('assets/red-theme.css') ?>">
+<link rel="stylesheet" href="<?= adminAsset('assets/offline-indicator.css') ?>">
 <link rel="shortcut icon" href="assets/images/favicon2.ico" />
 </head>
 <body>

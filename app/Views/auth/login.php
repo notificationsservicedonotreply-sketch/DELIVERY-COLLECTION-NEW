@@ -7,6 +7,7 @@
 <title>MARS MAIN SYSTEM</title>
 <link rel="stylesheet" href="<?= asset('Administrator/assets/css/fontawesome-free-7.3.1-web/css/all.min.css') ?>">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.3.1/css/all.min.css">
+<link rel="stylesheet" href="<?= asset('Administrator/assets/offline-indicator.css') ?>">
 <link rel="shortcut icon" href="Administrator/assets/images/favicon2.ico" />
 <meta name="theme-color" content="#8b1621">
 <link rel="manifest" href="manifest.json">
@@ -115,6 +116,8 @@ function togglePass(){
 })();
 
 </script>
+<script src="<?= asset('Administrator/assets/offline-core.js') ?>" defer></script>
+<script src="<?= asset('Administrator/assets/offline-indicator.js') ?>" defer></script>
 <script src="<?= asset('Administrator/assets/pwa-install.js') ?>" defer></script>
 
 </body>

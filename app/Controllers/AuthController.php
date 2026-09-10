@@ -64,6 +64,35 @@ class AuthController
         $this->loginError('Invalid userID or password.');
     }
 
+    /**
+     * Lightweight JSON endpoint used by the offline-support layer
+     * (offline-core.js) for two things:
+     *  1. A real connectivity/session check -- navigator.onLine only reflects
+     *     whether the network adapter is up, not whether the server or this
+     *     user's session is actually reachable, so the ONLINE/OFFLINE
+     *     indicator pings this instead.
+     *  2. Handing back a fresh CSRF token immediately before the queued
+     *     offline outbox is flushed, since a long-lived offline session could
+     *     span a session_regenerate_id() elsewhere.
+     * Deliberately returns only booleans/identifiers, never business data --
+     * this endpoint must stay cheap and side-effect-free since it may be
+     * polled every ~20 seconds while the app is open.
+     */
+    public function ping(): void
+    {
+        requireBootstrapped();
+        header('Content-Type: application/json');
+
+        $loggedIn = !empty($_SESSION['login']) && $_SESSION['login'] === '1';
+
+        echo json_encode([
+            'loggedIn' => $loggedIn,
+            'userID' => $loggedIn ? (string) ($_SESSION['userID'] ?? '') : null,
+            'csrfToken' => $loggedIn ? csrfToken() : null,
+            'serverTime' => date('c'),
+        ]);
+    }
+
     /** Handles logout (was Ajax/ajax_logout.php and the 'Logout' page route). */
     public static function logout(): void
     {

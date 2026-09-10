@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Offline - MARS Collection and Delivery</title>
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; font-family: Segoe UI, Arial, sans-serif; }
+    body {
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        text-align: center;
+        padding: 24px;
+        background: linear-gradient(135deg, #591019, #a71927 52%, #d6434c);
+        color: #fff;
+    }
+    .icon { font-size: 48px; margin-bottom: 12px; }
+    h1 { font-size: 20px; margin-bottom: 8px; }
+    p { font-size: 14px; opacity: .9; max-width: 340px; margin-bottom: 20px; }
+    button {
+        padding: 12px 24px;
+        border: none;
+        border-radius: 10px;
+        background: #fff;
+        color: #8b1621;
+        font-weight: bold;
+        font-size: 14px;
+        cursor: pointer;
+    }
+</style>
+</head>
+<body>
+    <div class="icon">&#128246;</div>
+    <h1>This page hasn't been loaded before</h1>
+    <p>
+        You're offline and this particular page hasn't been opened on this device yet, so there's nothing saved
+        to show. Pages and data you've already visited while online stay available offline -- try going back,
+        or reconnect and reload this page.
+    </p>
+    <button onclick="window.location.reload()">Try again</button>
+</body>
+</html>

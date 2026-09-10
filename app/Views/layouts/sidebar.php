@@ -53,6 +53,6 @@
             <i class="fa-solid fa-mobile-screen-button" aria-hidden="true"></i> Settings
         </a>
 
-        <a href="<?= Router::url('Logout') ?>"><i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i> Logout</a>
+        <a href="<?= Router::url('Logout') ?>" id="logoutLink"><i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i> Logout</a>
     </div>
 </div>
