@@ -5,17 +5,27 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="csrf-token" content="<?= htmlspecialchars(csrfToken(), ENT_QUOTES, 'UTF-8') ?>">
-<meta name="theme-color" content="#8b1621">
+<!-- Neutral on purpose: some browsers/OSes tint transient native UI (e.g.
+     a momentary scroll-fling overlay on touch devices) using this color,
+     which made brand red flash across the screen during an ordinary
+     scroll. The PWA's own theme (manifest.json's theme_color, used for the
+     installed app's status bar/splash) keeps the brand red -- this tag
+     only affects in-browser chrome. -->
+<meta name="theme-color" content="#ffffff">
 <link rel="manifest" href="../manifest.json">
 <link rel="apple-touch-icon" href="assets/images/pwa-icon-apple-touch.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="MARS DC">
-<script>window.PWA_BASE_PREFIX = '../';</script>
-<!-- Scopes the offline IndexedDB store to this user (see offline-core.js);
-     never used for authentication itself, only for local cache isolation
-     on shared devices. -->
-<script>window.MARS_USER_ID = <?= json_encode((string) ($_SESSION['userID'] ?? '')) ?>;</script>
+<script>
+window.PWA_BASE_PREFIX = '../';
+// Scopes offline-core.js's IndexedDB (and its stale-user guard) to whoever
+// is actually signed in on this device, so nothing leaks across accounts
+// on a shared device. Safe to render plainly: it's just this session's own
+// userID, already visible to the page in every other form (URLs, the
+// sidebar, etc.).
+window.MARS_USER_ID = <?= json_encode((string) ($_SESSION['userID'] ?? ''), JSON_UNESCAPED_SLASHES) ?>;
+</script>
 
 <title>MARS COLLECTION AND DELIVERY SYSTEM</title>
 

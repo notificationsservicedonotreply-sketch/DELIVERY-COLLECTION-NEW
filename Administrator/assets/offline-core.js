@@ -16,9 +16,12 @@
  *   submit(url, formData, {description}) - POST wrapper: sends immediately
  *                                if reachable; if the network itself is
  *                                unreachable, queues the request in the
- *                                outbox and returns {queued:true} instead of
- *                                throwing, so calling code can show "saved
- *                                offline, will sync" instead of an error.
+ *                                outbox (including any File/photo fields --
+ *                                stored as real Blobs, IndexedDB handles
+ *                                those natively) and returns {queued:true}
+ *                                instead of throwing, so calling code can
+ *                                show "saved offline, will sync" instead of
+ *                                an error.
  *   getState()                - {online, checking, pendingCount, lastError}
  *   onStatusChange(fn)        - subscribe to state changes
  *   flushOutbox()             - replay queued writes now (called
@@ -26,6 +29,39 @@
  *   retryOutboxItem(id) / discardOutboxItem(id)
  *   clearAll()                - wipes this user's local data (called on
  *                                logout and on user-switch detection)
+ *
+ *   bootstrap({force})        - fetches Ajax/ajax_offline_bootstrap.php and
+ *                                mirrors Customers/InvoiceList/TripInvoice/
+ *                                TriplistAssign (plus empty FileAttachment/
+ *                                CollectionSyntax* stores) into IndexedDB.
+ *                                Called once after landing on the Dashboard
+ *                                post-login, then kept fresh automatically
+ *                                from here on -- checkConnectivity() below
+ *                                re-runs it on every offline->online
+ *                                transition and every BOOTSTRAP_REFRESH_MS
+ *                                while continuously online (e.g. a new stop
+ *                                added to TriplistAssign mid-shift), so a
+ *                                rider doesn't have to revisit the
+ *                                Dashboard or tap "Sync now" for a newly
+ *                                assigned customer to show up offline. Safe
+ *                                to call again any time while online too.
+ *   getBootstrapMeta()         - {generatedAt} of the last successful
+ *                                bootstrap, or null if none yet.
+ *   searchCustomersOffline(query, module) - same matching behaviour as the
+ *                                server's "customers" search action, run
+ *                                entirely against the cached tables.
+ *   getCustomerOffline(code)
+ *   getAssignedDeliveryInvoicesOffline(userId, customerCode)
+ *   getTripsAssignedOffline(userId)
+ *   getDeliveryRadiusOffline()  - Delivery Portal's GPS radius (meters),
+ *                                as of the last bootstrap.
+ *   getIsJkasRiderOffline()     - this rider's UserList.SType === 'JKAS',
+ *                                as of the last bootstrap.
+ *   deliveryRequiresCollectionOffline(customerCode) - mirrors
+ *                                deliveryRequiresCollection().
+ *   searchCollectionInvoicesOffline(customerCode, query) - mirrors the
+ *                                "collection_invoices" action, run
+ *                                entirely against the cached InvoiceList.
  *
  * Every page that wants offline behaviour opts in by calling
  * mars.offline.fetchJSON / .submit instead of raw fetch(). Pages that
@@ -36,17 +72,45 @@
     'use strict';
 
     const PING_URL_SUFFIX = 'Ajax/ajax_session_ping.php';
+    const BOOTSTRAP_URL_SUFFIX = 'Ajax/ajax_offline_bootstrap.php';
     const PING_INTERVAL_MS = 20000;
+    // Keeps the offline snapshot (Customers/InvoiceList/TripInvoice/
+    // TriplistAssign) from silently going stale during a long shift spent
+    // continuously online -- e.g. a rider gets a new stop added to their
+    // TriplistAssign mid-day without ever actually losing connection, so
+    // the offline->online-transition refresh in checkConnectivity() below
+    // would never fire for them. This re-runs bootstrap() on a plain timer
+    // instead, independent of any connectivity transition.
+    const BOOTSTRAP_REFRESH_MS = 5 * 60 * 1000;
     const FETCH_TIMEOUT_MS = 8000;
     const MAX_AUTO_RETRIES = 5;
-    const DB_VERSION = 1;
+    // v2 adds the business-data stores (customers, invoiceList, tripInvoice,
+    // triplistAssign, fileAttachment, collectionSyntax*) on top of v1's
+    // generic kv/outbox stores.
+    const DB_VERSION = 2;
 
     const prefix = window.PWA_BASE_PREFIX || '';
     const pingUrl = prefix + PING_URL_SUFFIX;
+    const bootstrapUrl = prefix + BOOTSTRAP_URL_SUFFIX;
+
+    // Table name -> {store, keyPath}. keyPath 'null' means "no natural
+    // unique key in what the server returns" -> use an IndexedDB
+    // auto-incrementing key instead.
+    const BOOTSTRAP_TABLES = {
+        customers: { store: 'customers', keyPath: 'CustomerID' },
+        invoiceList: { store: 'invoiceList', keyPath: 'REFID' },
+        tripInvoice: { store: 'tripInvoice', keyPath: 'ID' },
+        triplistAssign: { store: 'triplistAssign', keyPath: null },
+        fileAttachment: { store: 'fileAttachment', keyPath: null },
+        collectionSyntaxCategory: { store: 'collectionSyntaxCategory', keyPath: null },
+        collectionSyntaxDtl: { store: 'collectionSyntaxDtl', keyPath: null },
+        collectionSyntaxHdr: { store: 'collectionSyntaxHdr', keyPath: null },
+        collectionSyntaxInvDtl: { store: 'collectionSyntaxInvDtl', keyPath: null },
+    };
 
     // The current user id is rendered server-side into every page (see
-    // header.php / login.php). 'guest' scopes local data for the logged-out
-    // (login) page, which never stores anything sensitive anyway.
+    // header.php). 'guest' scopes local data for the logged-out (login)
+    // page, which never stores anything sensitive anyway.
     const currentUserId = (window.MARS_USER_ID && String(window.MARS_USER_ID).trim()) || 'guest';
 
     // ------------------------------------------------------------------
@@ -84,7 +148,7 @@
                 return;
             }
             const req = indexedDB.open(dbName(currentUserId), DB_VERSION);
-            req.onupgradeneeded = () => {
+            req.onupgradeneeded = (event) => {
                 const db = req.result;
                 if (!db.objectStoreNames.contains('kv')) {
                     db.createObjectStore('kv', { keyPath: 'key' });
@@ -93,6 +157,17 @@
                     const store = db.createObjectStore('outbox', { keyPath: 'id', autoIncrement: true });
                     store.createIndex('createdAt', 'createdAt');
                 }
+                // Business-data mirrors (added in v2). Upgrading from v1
+                // only needs these created -- bootstrap() then fills them
+                // the first time the app calls it, same as a brand-new DB.
+                Object.values(BOOTSTRAP_TABLES).forEach(({ store: storeName, keyPath }) => {
+                    if (db.objectStoreNames.contains(storeName)) return;
+                    if (keyPath) {
+                        db.createObjectStore(storeName, { keyPath });
+                    } else {
+                        db.createObjectStore(storeName, { autoIncrement: true });
+                    }
+                });
             };
             req.onsuccess = () => resolve(req.result);
             req.onerror = () => reject(req.error);
@@ -131,6 +206,250 @@
     }
 
     // ------------------------------------------------------------------
+    // Business-data mirrors (customers, invoiceList, tripInvoice,
+    // triplistAssign, fileAttachment, collectionSyntax*)
+    // ------------------------------------------------------------------
+
+    /** Replaces the entire contents of one store with `rows` -- a full
+     *  mirror, not a merge, since the server bundle is always the
+     *  authoritative full list for that user/DB scope. */
+    async function replaceStore(storeName, rows) {
+        const db = await openDatabase();
+        await new Promise((resolve, reject) => {
+            const transaction = db.transaction(storeName, 'readwrite');
+            const store = transaction.objectStore(storeName);
+            store.clear();
+            (rows || []).forEach((row) => store.put(row));
+            transaction.oncomplete = () => resolve();
+            transaction.onerror = () => reject(transaction.error);
+        });
+    }
+
+    async function getAllFromStore(storeName) {
+        try {
+            const store = await tx(storeName, 'readonly');
+            return await idbRequest(store.getAll());
+        } catch (e) {
+            return [];
+        }
+    }
+
+    /**
+     * Fetches the login-scoped data bundle (Customers ⋈ InvoiceList,
+     * InvoiceList, TripInvoice ⋈ TriplistAssign, TriplistAssign, plus empty
+     * FileAttachment/CollectionSyntax* stores) and mirrors it into
+     * IndexedDB. Meant to run once right after the Dashboard loads
+     * post-login (see dashboard.js), but safe to call again any time while
+     * online -- e.g. from a manual "Refresh offline data" action -- since
+     * it always fully replaces each store rather than appending.
+     *
+     * No-ops (resolves false) when offline instead of throwing, so callers
+     * can just "fire and forget" this on page load.
+     */
+    async function bootstrap(opts) {
+        opts = opts || {};
+        if (!navigator.onLine && !opts.force) return false;
+
+        let response;
+        try {
+            response = await fetchWithTimeout(bootstrapUrl, { credentials: 'same-origin', cache: 'no-store' });
+        } catch (e) {
+            return false; // offline -- whatever was cached from last time stays as-is
+        }
+        if (!response.ok) return false;
+        const json = await response.json();
+        if (!json || !json.success || !json.tables) return false;
+
+        for (const [tableKey, config] of Object.entries(BOOTSTRAP_TABLES)) {
+            const rows = json.tables[tableKey] || [];
+            await replaceStore(config.store, rows);
+        }
+        // Not a table -- a handful of settings (currently just the Delivery
+        // Portal's GPS radius) the offline customer view needs to replicate
+        // the same proximity gate confirm_location enforces online. Stored
+        // in the same small key/value cache as everything else non-tabular.
+        await cachePut('offline_settings', json.tables.settings || {});
+        await cachePut('offline_bootstrap_meta', { generatedAt: json.generatedAt || Date.now() });
+        lastBootstrapAt = Date.now();
+        return true;
+    }
+
+    async function getBootstrapMeta() {
+        const cached = await cacheGet('offline_bootstrap_meta');
+        return cached ? cached.data : null;
+    }
+
+    /** Delivery Portal's GPS validation radius (meters), as of the last
+     *  bootstrap. Falls back to the same safe default the server uses
+     *  (SystemSettingsRepository::DEFAULT_RADIUS_METERS) if nothing has
+     *  been cached yet. */
+    async function getDeliveryRadiusOffline() {
+        const cached = await cacheGet('offline_settings');
+        const radius = Number(cached?.data?.deliveryRadius);
+        return radius > 0 ? radius : 100;
+    }
+
+    /** Whether the signed-in rider's UserList.SType is 'JKAS', as of the
+     *  last bootstrap -- one half of deliveryRequiresCollection()'s
+     *  decision (the other half is the customer's SellingType, already on
+     *  the cached customer record). */
+    async function getIsJkasRiderOffline() {
+        const cached = await cacheGet('offline_settings');
+        return !!cached?.data?.isJkasRider;
+    }
+
+    /** Mirrors deliveryRequiresCollection(): true when either the rider is
+     *  JKAS or the customer's SellingType is null/blank. */
+    async function deliveryRequiresCollectionOffline(customerCode) {
+        const [isJkas, customer] = await Promise.all([
+            getIsJkasRiderOffline(),
+            getCustomerOffline(customerCode),
+        ]);
+        const sellingType = customer?.SellingType;
+        const sellingTypeIsNull = sellingType === null || sellingType === undefined || String(sellingType).trim() === '';
+        return isJkas || sellingTypeIsNull;
+    }
+
+    /** Same "REFID contains query, positive balance" matching the server's
+     *  collection_invoices action applies (minus the "already collected"
+     *  cross-check against CollectionSyntaxInvDtl, which isn't meaningfully
+     *  available offline -- see the Delivery Portal's offline Collection
+     *  modal for how that limitation is surfaced to the rider). Returned in
+     *  the same shape the server uses so findInvoice()/searchInvoices() in
+     *  delivery-collection.js work against it unmodified. */
+    async function searchCollectionInvoicesOffline(customerCode, query) {
+        query = String(query || '').trim().toLowerCase();
+        if (query.length < 2) return { items: [], already_collected: false };
+
+        const invoices = await getAllFromStore('invoiceList');
+        const items = invoices.filter((row) => (
+            String(row.CUSTOMERID) === String(customerCode)
+            && Number(row.BALANCE) > 0
+            && String(row.REFID || '').toLowerCase().includes(query)
+        )).map((row) => ({
+            InvoiceNo: row.REFID,
+            Balance: row.BALANCE,
+            DeliveryDate: row.DELIVERYDATE,
+            DEPARTMENT: row.DEPARTMENT,
+            AlreadyCollected: 0,
+        }));
+
+        return { items, already_collected: false };
+    }
+
+    /** Offline counterpart of collection_invoices_batch: looks up an exact
+     *  set of invoice numbers (typically the ones just confirmed delivered
+     *  at this stop) in the cached InvoiceList, for the Collection modal's
+     *  auto-add-on-open step. */
+    async function searchCollectionInvoicesBatchOffline(customerCode, invoiceNumbers) {
+        const wanted = new Set((invoiceNumbers || []).map((no) => String(no)));
+        const invoices = await getAllFromStore('invoiceList');
+        const byRefId = new Map(
+            invoices
+                .filter((row) => String(row.CUSTOMERID) === String(customerCode) && Number(row.BALANCE) > 0)
+                .map((row) => [String(row.REFID), row])
+        );
+        const items = [];
+        const notFound = [];
+        wanted.forEach((invoiceNo) => {
+            const row = byRefId.get(invoiceNo);
+            if (row) {
+                items.push({ InvoiceNo: row.REFID, Balance: row.BALANCE, DeliveryDate: row.DELIVERYDATE, DEPARTMENT: row.DEPARTMENT });
+            } else {
+                notFound.push(invoiceNo);
+            }
+        });
+        return { items, not_found: notFound, already_collected: [] };
+    }
+
+    /** Same two-pass "prefix match first, then contains" ranking as the
+     *  server's searchCustomers(), run against the cached customers table.
+     *  `module === 'delivery'` additionally restricts to customers with a
+     *  pending (undelivered, unresolved) stop assigned to this user, same
+     *  as searchAssignedDeliveryCustomers(). */
+    async function searchCustomersOffline(query, module) {
+        query = String(query || '').trim();
+        if (query.length < 2) return [];
+        const needle = query.toLowerCase();
+
+        let customers = await getAllFromStore('customers');
+
+        if (module === 'delivery') {
+            const [tripInvoices, assignments] = await Promise.all([
+                getAllFromStore('tripInvoice'),
+                getAllFromStore('triplistAssign'),
+            ]);
+            const activeTripIds = new Set(
+                assignments
+                    .filter((a) => String(a.USERID) === String(currentUserId) && Number(a.Status) !== 0)
+                    .map((a) => a.TRIPID)
+            );
+            const pendingCustomerIds = new Set(
+                tripInvoices
+                    .filter((i) => activeTripIds.has(i.TripID) && !i.DeliveredDate && !i.NotDeliveredReason)
+                    .map((i) => i.CustomerID)
+            );
+            customers = customers.filter((c) => pendingCustomerIds.has(c.CustomerID));
+        }
+
+        const prefixMatches = [];
+        const containsMatches = [];
+        customers.forEach((c) => {
+            const id = String(c.CustomerID || '').toLowerCase();
+            const name = String(c.CustomerName || '').toLowerCase();
+            if (id.startsWith(needle) || name.startsWith(needle)) {
+                prefixMatches.push(c);
+            } else if (id.includes(needle) || name.includes(needle)) {
+                containsMatches.push(c);
+            }
+        });
+        const sortByName = (a, b) => String(a.CustomerName).localeCompare(String(b.CustomerName));
+        prefixMatches.sort(sortByName);
+        containsMatches.sort(sortByName);
+
+        return [...prefixMatches, ...containsMatches]
+            .slice(0, 20)
+            .map((c) => ({ code: c.CustomerID, name: c.CustomerName }));
+    }
+
+    async function getCustomerOffline(code) {
+        try {
+            const store = await tx('customers', 'readonly');
+            const row = await idbRequest(store.get(String(code)));
+            return row || null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    /** Mirrors assignedDeliveryInvoices(): pending (undelivered, unresolved)
+     *  TripInvoice rows for this customer, across every trip assigned to
+     *  `userId`. */
+    async function getAssignedDeliveryInvoicesOffline(userId, customerCode) {
+        const [tripInvoices, assignments] = await Promise.all([
+            getAllFromStore('tripInvoice'),
+            getAllFromStore('triplistAssign'),
+        ]);
+        const activeTripIds = new Set(
+            assignments.filter((a) => String(a.USERID) === String(userId) && Number(a.Status) !== 0).map((a) => a.TRIPID)
+        );
+        return tripInvoices
+            .filter((i) => activeTripIds.has(i.TripID) && String(i.CustomerID) === String(customerCode) && !i.DeliveredDate && !i.NotDeliveredReason)
+            .sort((a, b) => (a.TripID === b.TripID ? String(a.InvoiceNo).localeCompare(String(b.InvoiceNo)) : String(a.TripID).localeCompare(String(b.TripID))))
+            .map((i) => ({ TripID: i.TripID, InvoiceNo: i.InvoiceNo, DrNo: i.DrNo, CustomerID: i.CustomerID, TotalCrtns: i.TotalCrtns }));
+    }
+
+    /** Mirrors assignedTrips(): distinct, still-active trip IDs for this user. */
+    async function getTripsAssignedOffline(userId) {
+        const assignments = await getAllFromStore('triplistAssign');
+        const tripIds = assignments
+            .filter((a) => String(a.USERID) === String(userId) && Number(a.Status) !== 0)
+            .map((a) => String(a.TRIPID).trim())
+            .filter(Boolean);
+        return [...new Set(tripIds)].sort();
+    }
+
+    // ------------------------------------------------------------------
     // Outbox (queued writes)
     // ------------------------------------------------------------------
     async function outboxAll() {
@@ -166,23 +485,34 @@
         return idbRequest(store.delete(id));
     }
 
+    // A File is a Blob with a name/type/lastModified -- IndexedDB's
+    // structured-clone storage handles Blobs natively (no base64 encoding
+    // needed), so a queued attachment (store photo, deposit slip, payment/
+    // split proof) survives a tab close and page reload just like any other
+    // field. Only the name/type/lastModified need capturing separately,
+    // since re-wrapping a Blob back into a File on replay needs them.
     function formDataToFields(formData) {
         const fields = {};
         for (const [key, value] of formData.entries()) {
             if (value instanceof File) {
-                throw new Error(
-                    "This includes a file/photo attachment, which can't be queued for offline sync yet. " +
-                    'Please retry once you have a connection.'
-                );
+                fields[key] = { __file: true, blob: value, name: value.name, type: value.type, lastModified: value.lastModified };
+            } else {
+                fields[key] = value;
             }
-            fields[key] = value;
         }
         return fields;
     }
 
     function fieldsToFormData(fields) {
         const fd = new FormData();
-        Object.keys(fields).forEach((k) => fd.append(k, fields[k]));
+        Object.keys(fields).forEach((k) => {
+            const v = fields[k];
+            if (v && typeof v === 'object' && v.__file) {
+                fd.append(k, new File([v.blob], v.name, { type: v.type, lastModified: v.lastModified }));
+            } else {
+                fd.append(k, v);
+            }
+        });
         return fd;
     }
 
@@ -197,6 +527,10 @@
         lastCheckedAt: null,
     };
     const listeners = new Set();
+    // In-memory only (reset on page load); combined with BOOTSTRAP_REFRESH_MS
+    // in checkConnectivity() below to re-run bootstrap() periodically while
+    // continuously online, not just right after reconnecting.
+    let lastBootstrapAt = 0;
 
     function emit() {
         listeners.forEach((fn) => {
@@ -216,6 +550,7 @@
     async function checkConnectivity() {
         state.checking = true;
         emit();
+        const wasOnline = state.online;
         try {
             const res = await fetchWithTimeout(pingUrl, { credentials: 'same-origin', cache: 'no-store' });
             if (!res.ok) throw new Error('ping HTTP ' + res.status);
@@ -233,6 +568,18 @@
 
         if (state.online && state.pendingCount > 0) {
             flushOutbox();
+        }
+        // Just came back online -- refresh the offline data snapshot too,
+        // not only the outbox, so cached lists don't go stale indefinitely
+        // across a long reconnect gap.
+        if (state.online && !wasOnline) {
+            bootstrap();
+        } else if (state.online && Date.now() - lastBootstrapAt > BOOTSTRAP_REFRESH_MS) {
+            // Also refresh periodically while continuously online -- e.g. a
+            // rider assigned a new stop mid-shift without ever actually
+            // losing connection would otherwise never get that stop mirrored
+            // into IndexedDB until their next login.
+            bootstrap();
         }
         return state.online;
     }
@@ -290,8 +637,9 @@
         } catch (networkErr) {
             // fetch() itself threw -- a genuine network failure (offline,
             // DNS failure, timeout abort), not a server-side rejection.
-            // Queue it and let the sync engine replay it later.
-            const fields = formDataToFields(formData); // throws if a File is attached
+            // Queue it (attachments included) and let the sync engine
+            // replay it later.
+            const fields = formDataToFields(formData);
             const id = await outboxAdd({
                 url,
                 fields,
@@ -370,6 +718,9 @@
                 }
             }
             await refreshPendingCount();
+            // A successful sync run means we're genuinely online -- take the
+            // opportunity to refresh the offline data snapshot too.
+            if ((await outboxCount()) === 0) bootstrap();
         } finally {
             flushing = false;
         }
@@ -427,5 +778,16 @@
         clearAll,
         checkNow: checkConnectivity,
         getUserId: () => currentUserId,
+        bootstrap,
+        getBootstrapMeta,
+        searchCustomersOffline,
+        getCustomerOffline,
+        getAssignedDeliveryInvoicesOffline,
+        getTripsAssignedOffline,
+        getDeliveryRadiusOffline,
+        getIsJkasRiderOffline,
+        deliveryRequiresCollectionOffline,
+        searchCollectionInvoicesOffline,
+        searchCollectionInvoicesBatchOffline,
     };
 })();

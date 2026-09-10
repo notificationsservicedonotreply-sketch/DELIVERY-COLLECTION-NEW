@@ -12,6 +12,11 @@ let collectionInRange = false;
 let collectionAccessGranted = false;
 let locationConfirmedForDelivery = false;
 let mapFitTarget = null;
+// Deposit Slip modal: which row's button triggered it, so a successful (or
+// offline-queued) upload can mark that same row as uploaded without a page
+// reload. Module-scoped (not local to the DOMContentLoaded handler below)
+// so markDepositSlipUploaded() can reach it too.
+let currentDepositSlipButton = null;
 // Delivery Portal only: once a required Collection has been saved for this
 // customer visit, further "Confirm delivery" clicks don't need to open the
 // Collection modal again.
@@ -50,13 +55,34 @@ function moduleContext() {
     };
 }
 
+// Actions whose file-carrying FormData can be safely queued in the offline
+// outbox and replayed later -- the server treats each one as a single
+// all-or-nothing write, so a queued-then-later-sent copy behaves exactly
+// like sending it now would have. Anything not in this list (searches,
+// GPS/location verification, invoice lookups) needs a live answer from the
+// server to be trustworthy, so it fails clearly instead of guessing.
+const OFFLINE_QUEUEABLE_ACTIONS = new Set([
+    'complete_delivery',
+    'complete_collection',
+    'complete_delivery_with_collection',
+    'not_delivered',
+    'upload_deposit_slip',
+]);
+
 async function post(action, data) {
     const body = data instanceof FormData ? data : new URLSearchParams(data || {});
     body.set('action', action);
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
     if (csrfToken) body.set('csrf_token', csrfToken);
 
-    const response = await fetch(endpoint, { method: 'POST', body, credentials: 'same-origin' });
+    let response;
+    try {
+        response = await fetch(endpoint, { method: 'POST', body, credentials: 'same-origin' });
+    } catch (networkError) {
+        // fetch() itself threw -- a genuine connectivity failure (offline,
+        // DNS, timeout), not the server rejecting anything.
+        return handleOfflineAction(action, body);
+    }
     const json = await response.json();
 
     if (response.status === 401) {
@@ -69,6 +95,79 @@ async function post(action, data) {
     }
 
     return json;
+}
+
+/** Best-effort handling for a post() call that couldn't reach the server at
+ *  all. Customer search falls back to the IndexedDB mirror kept up to date
+ *  by mars.offline.bootstrap(); saves/uploads that carry a file are queued
+ *  in the offline outbox (attachments included) and replayed automatically
+ *  once back online. Anything else throws a clear, honest error instead of
+ *  guessing at an answer offline can't actually provide. */
+async function handleOfflineAction(action, body) {
+    if (!window.mars || !window.mars.offline) {
+        throw Error("You're offline and offline mode isn't available in this browser.");
+    }
+
+    if (action === 'customers') {
+        const items = await window.mars.offline.searchCustomersOffline(body.get('q'), body.get('module'));
+        return { success: true, items, offline: true };
+    }
+
+    if (action === 'collection_invoices') {
+        const result = await window.mars.offline.searchCollectionInvoicesOffline(body.get('customer'), body.get('q'));
+        return { success: true, ...result, offline: true };
+    }
+
+    if (action === 'collection_invoices_batch') {
+        const invoiceNumbers = JSON.parse(body.get('invoice_numbers') || '[]');
+        const result = await window.mars.offline.searchCollectionInvoicesBatchOffline(body.get('customer'), invoiceNumbers);
+        return { success: true, ...result, offline: true };
+    }
+
+    if (OFFLINE_QUEUEABLE_ACTIONS.has(action)) {
+        const result = await window.mars.offline.submit(endpoint, body, { description: describeQueuedAction(action, body) });
+        if (result.queued) {
+            const error = Error("You're offline. This has been saved on your device and will sync automatically once you're back online.");
+            error.offlineQueued = true;
+            throw error;
+        }
+        // submit() only returns queued:false when it actually reached the
+        // network after all (a brief connectivity blip) -- re-read the body.
+        const json = await result.response.json();
+        if (!json.success) throw Error(json.message || 'Request failed.');
+        return json;
+    }
+
+    throw Error("You're offline. This needs a connection to continue -- please try again once you're back online.");
+}
+
+/** Marks the row's deposit-slip button as uploaded immediately, without a
+ *  page reload -- used for both a normal upload and one queued offline
+ *  (optimistic: the file is safely in the outbox either way). */
+function markDepositSlipUploaded() {
+    if (!currentDepositSlipButton) return;
+    currentDepositSlipButton.classList.remove('btn-gray');
+    currentDepositSlipButton.classList.add('btn-green', 'deposit-slip-btn--uploaded');
+    currentDepositSlipButton.title = 'Deposit slip already uploaded — tap to view or replace it';
+    currentDepositSlipButton.querySelector('i')?.classList.replace('fa-receipt', 'fa-circle-check');
+    if (!currentDepositSlipButton.querySelector('.deposit-slip-uploaded-badge')) {
+        const uploadedBadge = document.createElement('span');
+        uploadedBadge.className = 'deposit-slip-uploaded-badge';
+        uploadedBadge.textContent = 'Uploaded';
+        currentDepositSlipButton.append(uploadedBadge);
+    }
+}
+
+function describeQueuedAction(action, body) {
+    const customer = body.get('customer') || '';
+    const labels = {
+        complete_delivery: `Delivery confirmation for ${customer}`,
+        complete_collection: `Collection for ${customer}`,
+        complete_delivery_with_collection: `Delivery + collection for ${customer}`,
+        not_delivered: `Not-delivered report for ${customer}`,
+        upload_deposit_slip: `Deposit slip for ${customer}`,
+    };
+    return labels[action] || (action + ' for ' + customer);
 }
 
 function notice(text, type) {
@@ -95,6 +194,11 @@ function notice(text, type) {
 function openCustomer() {
     if (!selectedSearchCustomer) {
         return notice('Select a customer from the search results first.', 'error');
+    }
+
+    if (isOffline()) {
+        openCustomerOffline(selectedSearchCustomer.code, selectedSearchCustomer.name);
+        return;
     }
 
     location.href = `?page=${encodeURIComponent(id('pageToken').value)}&customer=${encodeURIComponent(selectedSearchCustomer.code)}`;
@@ -151,6 +255,429 @@ function customerResult(customer) {
 
     return result;
 }
+
+/** True connectivity, per mars.offline's own ping-based check (more
+ *  reliable than navigator.onLine alone -- see offline-core.js) when
+ *  available, falling back to navigator.onLine otherwise. */
+function isOffline() {
+    const marsState = window.mars?.offline?.getState?.();
+    return marsState ? !marsState.online : !navigator.onLine;
+}
+
+/** Small DOM-building helper so renderOfflineCustomerView() and friends
+ *  don't need innerHTML + string interpolation (and the manual escaping
+ *  that would require) for content that includes customer-supplied data
+ *  like names and addresses. */
+function h(tag, attrs, children) {
+    const node = document.createElement(tag);
+    Object.entries(attrs || {}).forEach(([key, value]) => {
+        if (value === undefined || value === null || value === false) return;
+        if (key === 'class') node.className = value;
+        else if (key === 'text') node.textContent = value;
+        else node.setAttribute(key, value === true ? '' : value);
+    });
+    (children || []).forEach((child) => { if (child) node.append(child); });
+    return node;
+}
+
+function infoBox(label, value) {
+    return h('div', { class: 'info-box' }, [
+        h('label', { text: label }),
+        h('div', { class: 'value', text: value }),
+    ]);
+}
+
+/** Same as infoBox(), but for when the value itself needs to be a live
+ *  element (e.g. a <span id="summaryBalance"> that other shared functions
+ *  update directly) rather than static text. */
+function infoBoxEl(label, valueEl) {
+    return h('div', { class: 'info-box' }, [
+        h('label', { text: label }),
+        h('div', { class: 'value' }, [valueEl]),
+    ]);
+}
+
+/** One <tr> of the offline "Invoices for delivery" table -- same fields,
+ *  classes and data attributes as the server-rendered version in
+ *  delivery/portal.php, so it's wired up by (and looks identical to) the
+ *  exact same deliver()/notDelivered()/updateDeliveryButtonStates() code
+ *  the online page uses. */
+function offlineInvoiceRow(invoice) {
+    const photoInput = h('input', {
+        type: 'file', class: 'store-photo-input',
+        accept: 'image/jpeg,image/png,image/gif,image/webp', capture: 'environment', required: true,
+    });
+    const confirmBtn = h('button', {
+        type: 'button', class: 'btn btn-green confirm-delivery',
+        'data-trip-id': invoice.TripID, 'data-invoice-no': invoice.InvoiceNo, disabled: true,
+    }, [h('i', { class: 'fa-solid fa-circle-check', 'aria-hidden': 'true' }), document.createTextNode(' Confirm delivery')]);
+    const notDeliveredBtn = h('button', {
+        type: 'button', class: 'btn btn-red not-delivered-toggle',
+        'data-trip-id': invoice.TripID, 'data-invoice-no': invoice.InvoiceNo,
+    }, [h('i', { class: 'fa-solid fa-triangle-exclamation', 'aria-hidden': 'true' }), document.createTextNode(' Not received')]);
+    const reasonText = h('textarea', {
+        class: 'input not-delivered-reason-text', rows: '2', maxlength: '255',
+        placeholder: "Why wasn't this delivery received? e.g. store closed, customer not around, refused delivery",
+    });
+    const cancelBtn = h('button', { type: 'button', class: 'btn btn-gray not-delivered-cancel', text: 'Cancel' });
+    const saveReasonBtn = h('button', {
+        type: 'button', class: 'btn btn-red not-delivered-submit',
+        'data-trip-id': invoice.TripID, 'data-invoice-no': invoice.InvoiceNo, text: 'Save reason',
+    });
+    const reasonPanel = h('div', { class: 'not-delivered-reason dc-hidden' }, [
+        reasonText,
+        h('div', { class: 'not-delivered-reason-actions' }, [cancelBtn, saveReasonBtn]),
+    ]);
+
+    confirmBtn.addEventListener('click', () => deliver(confirmBtn));
+    notDeliveredBtn.addEventListener('click', () => {
+        reasonPanel.classList.toggle('dc-hidden');
+        if (!reasonPanel.classList.contains('dc-hidden')) reasonText.focus();
+    });
+    cancelBtn.addEventListener('click', () => { reasonPanel.classList.add('dc-hidden'); reasonText.value = ''; });
+    saveReasonBtn.addEventListener('click', () => notDelivered(saveReasonBtn));
+    // No need to wire photoInput's 'change' event here -- there's already a
+    // document-level delegated listener (see the DOMContentLoaded wiring
+    // below) that calls updateDeliveryButtonStates() for any
+    // .store-photo-input, including these dynamically-created ones.
+
+    return h('tr', { 'data-delivery-invoice': true }, [
+        h('td', { text: invoice.TripID }),
+        h('td', { text: invoice.InvoiceNo }),
+        h('td', { text: invoice.DrNo || '' }),
+        h('td', { text: String(invoice.TotalCrtns ?? '') }),
+        h('td', {}, [photoInput]),
+        h('td', { class: 'delivery-action-cell' }, [confirmBtn, notDeliveredBtn, reasonPanel]),
+    ]);
+}
+
+function closeOfflineCustomerView() {
+    const container = id('offlineCustomerView');
+    container?.classList.add('dc-hidden');
+    container?.replaceChildren();
+    document.querySelector('.customer-search-card')?.classList.remove('dc-hidden');
+    id('portalMessage')?.classList.remove('dc-hidden');
+    if (id('customerSearch')) id('customerSearch').value = '';
+    selectedSearchCustomer = null;
+}
+
+/**
+ * Offline stand-in for a full "?page=Delivery-Portal&customer=X" page
+ * navigation: builds the same Customer details + Invoices for delivery
+ * sections the server would render, from what's already mirrored into
+ * IndexedDB by offline-core.js's bootstrap(), instead of requiring a live
+ * request.
+ *
+ * Always treats the stop as delivery-only (window.deliveryRequiresCollection
+ * stays false): whether a Collection is actually required depends on
+ * server-side rider/customer data this view doesn't have, and collecting
+ * payment needs its own live GPS/server round-trip (collection_access)
+ * regardless -- so that stays a "Resume collection" task for once the
+ * rider is back online, same as an interrupted Collection already is today.
+ *
+ * The GPS proximity gate itself (confirm_location online) is replicated
+ * client-side using the same haversineMeters() formula used for route
+ * suggestions below, the customer's cached coordinates, and the cached
+ * Delivery Portal radius -- so a rider genuinely has to be on-site to
+ * unlock these buttons, offline or not. The coordinates recorded at that
+ * moment still travel with the queued submission and get re-validated by
+ * the server once it syncs.
+ */
+async function openCustomerOffline(code, name) {
+    const container = id('offlineCustomerView');
+    if (!container || !window.mars?.offline) return;
+
+    const customer = await window.mars.offline.getCustomerOffline(code);
+    if (!customer) {
+        notice(`${name || code} isn't on your cached trip list for this device yet. It'll be included the next time you sync while online (Dashboard, or "Sync now" in the offline badge).`, 'error');
+        return;
+    }
+
+    const userId = window.MARS_USER_ID;
+    const [invoices, radius, requiresCollection] = await Promise.all([
+        window.mars.offline.getAssignedDeliveryInvoicesOffline(userId, code),
+        window.mars.offline.getDeliveryRadiusOffline(),
+        window.mars.offline.deliveryRequiresCollectionOffline(code),
+    ]);
+
+    // Hide the search UI and route modal, same as a real navigation would.
+    id('customerResults')?.classList.add('dc-hidden');
+    id('portalMessage')?.classList.add('dc-hidden');
+    document.querySelector('.customer-search-card')?.classList.add('dc-hidden');
+    id('routeModal')?.classList.remove('active');
+
+    window.deliveryRequiresCollection = requiresCollection;
+    locationConfirmedForDelivery = false;
+    collectionInRange = false;
+    collectionAccessGranted = false;
+    gps = null;
+
+    const address = [customer.Street, customer.Barangay, customer.Municipality, customer.Province].filter(Boolean).join(', ');
+    const lat = Number(customer.Latitude);
+    const lng = Number(customer.Longitude);
+
+    const rangeNotice = h('div', { class: 'notice info', text: 'Getting your location…' });
+    const invoicesSection = h('div', { class: 'dc-hidden' });
+    const proceedBtn = h('button', { type: 'button', class: 'btn btn-green dc-hidden' }, [
+        h('i', { class: 'fa-solid fa-truck', 'aria-hidden': 'true' }), document.createTextNode(' Proceed to delivery'),
+    ]);
+    proceedBtn.addEventListener('click', () => {
+        locationConfirmedForDelivery = true;
+        // Collecting payment needs the same on-site GPS proximity that was
+        // just verified to show this button -- so unlock it here too,
+        // rather than asking the rider to re-confirm the same location a
+        // second time a moment later. This mirrors how the online page's
+        // confirm_location and collection_access checks both key off the
+        // same on-site GPS reading for a single visit to one stop.
+        collectionInRange = true;
+        collectionAccessGranted = requiresCollection;
+        invoicesSection.classList.remove('dc-hidden');
+        proceedBtn.classList.add('dc-hidden');
+        updateDeliveryButtonStates();
+        notice('Location confirmed. Attach a store photo, then confirm each invoice one at a time.', 'success');
+    });
+    const backBtn = h('button', { type: 'button', class: 'btn btn-gray' }, [
+        h('i', { class: 'fa-solid fa-arrow-left', 'aria-hidden': 'true' }), document.createTextNode(' Back to search'),
+    ]);
+    backBtn.addEventListener('click', closeOfflineCustomerView);
+
+    const customerCard = h('div', { class: 'card customer-card' }, [
+        h('div', { class: 'card-title', text: 'Customer details' }),
+        h('div', { class: 'notice info', text: "You're offline — showing what was last saved to this device." }),
+        h('div', { class: 'grid' }, [
+            infoBox('Customer ID', customer.CustomerID),
+            infoBox('Customer Name', customer.CustomerName),
+            infoBox('Address', address || '—'),
+            infoBox('Latitude / Longitude', `${customer.Latitude}, ${customer.Longitude}`),
+        ]),
+        rangeNotice,
+        h('div', { class: 'footer-actions' }, [backBtn, proceedBtn]),
+    ]);
+
+    invoicesSection.append(h('div', { class: 'card' }, [
+        h('div', { class: 'card-title', text: 'Invoices for delivery' }),
+        requiresCollection
+            ? h('div', { class: 'notice info', text: 'This customer requires a Collection. Confirm every invoice below, then record the collection to finish.' })
+            : null,
+        h('div', { class: 'table-wrapper' }, [
+            h('table', { class: 'table' }, [
+                h('thead', {}, [
+                    h('tr', {}, [
+                        h('th', { text: 'Trip ID' }), h('th', { text: 'Invoice No.' }), h('th', { text: 'DR No.' }),
+                        h('th', { text: 'Total Cartons' }), h('th', { text: 'Store photo *' }), h('th', { text: 'Action' }),
+                    ]),
+                ]),
+                h('tbody', { id: 'deliveryDetails' }, invoices.length
+                    ? invoices.map((invoice) => offlineInvoiceRow(invoice))
+                    : [h('tr', {}, [h('td', { colspan: '6', text: 'No pending invoices assigned to you for this customer.' })])]),
+            ]),
+        ]),
+        requiresCollection
+            ? (() => {
+                const resumeBtn = h('button', { id: 'resumeCollection', type: 'button', class: 'btn btn-blue dc-hidden' }, [
+                    h('i', { class: 'fa-solid fa-hand-holding-dollar', 'aria-hidden': 'true' }), document.createTextNode(' Resume collection'),
+                ]);
+                resumeBtn.addEventListener('click', () => id('collectionRequiredModal')?.classList.add('active'));
+                return h('div', { class: 'footer-actions' }, [resumeBtn]);
+            })()
+            : null,
+    ]));
+
+    const selectedCustomerInput = h('input', { type: 'hidden', id: 'selectedCustomer', value: customer.CustomerID });
+    const nodes = [selectedCustomerInput, customerCard, invoicesSection];
+    if (requiresCollection) {
+        nodes.push(buildOfflineCollectionModal(), buildOfflineSaveConfirmModal());
+    }
+
+    container.replaceChildren(...nodes);
+    container.classList.remove('dc-hidden');
+
+    if (requiresCollection) {
+        // Same one-time setup the online page's DOMContentLoaded wiring
+        // does when this modal is present: start with one empty payment
+        // row and the totals at zero, ready to fill in.
+        paymentRow();
+        summary();
+        updateCollectionTotals();
+    }
+
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || !navigator.geolocation) {
+        rangeNotice.textContent = 'Location for this customer is not available on this device -- deliveries here need a connection.';
+        rangeNotice.className = 'notice error';
+        return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+        (position) => {
+            gps = { latitude: position.coords.latitude, longitude: position.coords.longitude };
+            const distance = haversineMeters(lat, lng, gps.latitude, gps.longitude);
+            const withinRange = distance <= radius;
+            rangeNotice.textContent = withinRange
+                ? `You're ${Math.round(distance)} m from the customer — within the ${radius} m radius.`
+                : `You're ${Math.round(distance)} m from the customer — move within ${radius} m to proceed.`;
+            rangeNotice.className = `notice ${withinRange ? 'success' : 'error'}`;
+            proceedBtn.classList.toggle('dc-hidden', !withinRange);
+        },
+        () => {
+            rangeNotice.textContent = 'Could not get your location. Enable location access and try again.';
+            rangeNotice.className = 'notice error';
+        },
+        { enableHighAccuracy: true, timeout: 15000 }
+    );
+}
+
+/**
+ * Builds the Collection-required modal from scratch (it only exists in the
+ * server-rendered page when a live ?customer= request determines
+ * $requiresCollection -- see delivery/portal.php). Deliberately reuses the
+ * exact same element ids the ONLINE page uses (paymentRows, invoiceRows,
+ * prNumber, totalOutstandingInvoices, etc.), so the existing, already
+ *-tested paymentRow()/manualInvoiceRow()/findInvoice()/selectedInvoices()/
+ * collectionRequirements()/submitDeliveriesWithCollection() functions all
+ * work against it completely unmodified -- this only has to build the
+ * markup and wire the handful of buttons those functions don't already
+ * self-wire (since the page's one-time DOMContentLoaded wiring ran before
+ * this modal existed).
+ *
+ * Splits (Step 4 online) are intentionally omitted -- an optional
+ * accounting breakdown, not required to save a collection -- but the
+ * elements shared functions unconditionally read (splitRows,
+ * totalSplitBalance, summarySplit) are still present, empty, so nothing
+ * throws.
+ */
+function buildOfflineCollectionModal() {
+    const prNumber = h('input', { id: 'prNumber', class: 'input', required: true, placeholder: 'Enter PR number' });
+
+    const invoiceSearch = h('input', { id: 'invoiceSearch', class: 'input', autocomplete: 'off', placeholder: 'Type at least 2 characters' });
+    const invoiceResults = h('div', { id: 'invoiceResults', class: 'customer-results dc-hidden', role: 'listbox' });
+    const invoiceSearchHint = h('small', { id: 'invoiceSearchHint', text: 'Enter an invoice number, then press Enter or select Add invoice.' });
+    const addInvoiceBtn = h('button', { id: 'addInvoice', type: 'button', class: 'btn btn-blue' }, [
+        h('i', { class: 'fa-solid fa-search', 'aria-hidden': 'true' }), document.createTextNode(' Search invoice'),
+    ]);
+    const addManualInvoiceRowBtn = h('button', { id: 'addManualInvoiceRow', type: 'button', class: 'btn btn-blue' }, [
+        h('i', { class: 'fa-solid fa-pen-to-square', 'aria-hidden': 'true' }), document.createTextNode(' Add Invoice Manual row'),
+    ]);
+    invoiceSearch.addEventListener('input', (e) => searchInvoices(e.target.value.trim()));
+    invoiceSearch.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); findInvoice(); } });
+    addInvoiceBtn.addEventListener('click', findInvoice);
+    addManualInvoiceRowBtn.addEventListener('click', manualInvoiceRow);
+
+    const paymentRows = h('tbody', { id: 'paymentRows' });
+    const addPaymentBtn = h('button', { id: 'addPayment', type: 'button', class: 'btn btn-blue' }, [
+        h('i', { class: 'fa-solid fa-plus', 'aria-hidden': 'true' }), document.createTextNode(' Add payment'),
+    ]);
+    addPaymentBtn.addEventListener('click', paymentRow);
+
+    const closeBtn = h('button', { class: 'close-btn', id: 'closeCollectionRequired', 'aria-label': 'Close' }, [document.createTextNode('×')]);
+    closeBtn.addEventListener('click', () => {
+        modal.classList.remove('active');
+        pendingDeliveryAfterCollection = null;
+        if (finalSubmitMode) id('resumeCollection')?.classList.remove('dc-hidden');
+    });
+
+    const modal = h('div', { class: 'custom-modal', id: 'collectionRequiredModal', role: 'dialog', 'aria-modal': 'true' }, [
+        h('div', { class: 'custom-modal-content route-modal-content' }, [
+            h('div', { class: 'modal-header' }, [
+                h('h2', {}, [h('i', { class: 'fa-solid fa-hand-holding-dollar', 'aria-hidden': 'true' }), document.createTextNode(' Collection required before delivery')]),
+                closeBtn,
+            ]),
+            h('div', { class: 'modal-body' }, [
+                h('div', { class: 'notice info', text: "You're offline — this collection will be saved on your device and synced once you're back online." }),
+                h('div', { id: 'collectionDetails' }, [
+                    h('div', { class: 'card workflow-step pr-number-card', id: 'collectionStep1' }, [
+                        h('div', { class: 'card-title' }, [h('span', { class: 'step-number', text: '1' }), document.createTextNode(' PR number *')]),
+                        h('div', { class: 'grid' }, [h('div', { class: 'info-box' }, [prNumber])]),
+                    ]),
+                    h('div', { class: 'card workflow-step', id: 'collectionStep2' }, [
+                        h('div', { class: 'card-title' }, [h('span', { class: 'step-number', text: '2' }), document.createTextNode(' Invoices with outstanding balance *')]),
+                        h('div', { class: 'portal-actions' }, [
+                            h('div', { class: 'customer-picker', style: 'position:relative;' }, [
+                                h('label', { for: 'invoiceSearch', text: 'Search invoice number *' }),
+                                invoiceSearch,
+                                invoiceResults,
+                                invoiceSearchHint,
+                            ]),
+                            addInvoiceBtn,
+                            addManualInvoiceRowBtn,
+                        ]),
+                        h('div', { class: 'table-wrapper' }, [
+                            h('table', { class: 'table' }, [
+                                h('thead', {}, [h('tr', {}, [h('th', {}), h('th', { text: 'Invoice' }), h('th', { text: 'Delivery date' }), h('th', { text: 'Department' }), h('th', { text: 'Balance' }), h('th', {})])]),
+                                h('tbody', { id: 'invoiceRows' }, [h('tr', {}, [h('td', { colspan: '6', text: 'Search for an invoice number.' })])]),
+                                h('tfoot', {}, [h('tr', { class: 'table-total' }, [h('td', { colspan: '5', text: 'Total selected invoices' }), h('td', { id: 'totalOutstandingInvoices', text: '0.00' })])]),
+                            ]),
+                        ]),
+                    ]),
+                    h('div', { class: 'card workflow-step', id: 'collectionStep3' }, [
+                        h('div', { class: 'card-title' }, [h('span', { class: 'step-number', text: '3' }), document.createTextNode(' Collection details')]),
+                        h('p', { class: 'form-help', text: 'Add at least one payment amount. For Cash, bank initial, check number, and attachment are unavailable. For PDC, all fields are available.' }),
+                        h('div', { class: 'table-wrapper' }, [
+                            h('table', { class: 'table' }, [
+                                h('thead', {}, [h('tr', {}, [h('th', { text: 'Payment type' }), h('th', { text: 'Bank initial' }), h('th', { text: 'Check no.' }), h('th', { text: 'Attachment' }), h('th', { text: 'Amount *' }), h('th', {})])]),
+                                paymentRows,
+                                h('tfoot', {}, [h('tr', { class: 'table-total' }, [h('td', { colspan: '4', text: 'Total collection details' }), h('td', { id: 'totalCollectionDetails', text: '0.00' }), h('td', {})])]),
+                            ]),
+                        ]),
+                        addPaymentBtn,
+                        // collectionRequirements()/summary()/updateCollectionTotals() all
+                        // read these unconditionally -- kept empty/zero since Splits
+                        // aren't offered offline (see docblock above).
+                        h('table', { class: 'dc-hidden' }, [h('tbody', { id: 'splitRows' })]),
+                        h('span', { id: 'totalSplitBalance', class: 'dc-hidden', text: '0.00' }),
+                    ]),
+                    h('div', { class: 'card' }, [
+                        h('div', { class: 'card-title', text: 'Summary' }),
+                        h('div', { class: 'grid' }, [
+                            infoBoxEl('Invoice total', h('span', { id: 'summaryInvoice', text: '0.00' })),
+                            infoBoxEl('Splits', h('span', { id: 'summarySplit', text: '- 0.00' })),
+                            infoBoxEl('Collected', h('span', { id: 'summaryCollected', text: '- 0.00' })),
+                            infoBoxEl('Balance', h('span', { id: 'summaryBalance', text: '0.00' })),
+                        ]),
+                    ]),
+                ]),
+                h('div', { class: 'footer-actions' }, [
+                    (() => {
+                        const btn = h('button', { id: 'completeTransaction', type: 'button', class: 'btn btn-green' }, [
+                            h('i', { class: 'fa-solid fa-floppy-disk', 'aria-hidden': 'true' }), document.createTextNode(' Save collection'),
+                        ]);
+                        btn.addEventListener('click', showSaveConfirmation);
+                        return btn;
+                    })(),
+                ]),
+            ]),
+        ]),
+    ]);
+
+    return modal;
+}
+
+function buildOfflineSaveConfirmModal() {
+    const saveRequirements = h('div', { id: 'saveRequirements', class: 'save-requirements' });
+    const cancelBtn = h('button', { id: 'cancelSave', class: 'btn btn-blue' }, [h('i', { class: 'fa-solid fa-xmark', 'aria-hidden': 'true' }), document.createTextNode(' No')]);
+    const confirmBtn = h('button', { id: 'confirmSave', class: 'btn btn-green' }, [h('i', { class: 'fa-solid fa-floppy-disk', 'aria-hidden': 'true' }), document.createTextNode(' Yes, save collection')]);
+    const closeBtn = h('button', { class: 'close-btn', id: 'closeSaveConfirm' }, [document.createTextNode('×')]);
+    const modal = h('div', { class: 'custom-modal', id: 'saveConfirmModal', role: 'dialog', 'aria-modal': 'true' }, [
+        h('div', { class: 'custom-modal-content confirmation-modal' }, [
+            h('div', { class: 'modal-header' }, [
+                h('h2', {}, [h('i', { class: 'fa-solid fa-circle-check', 'aria-hidden': 'true' }), document.createTextNode(' Save collection?')]),
+                closeBtn,
+            ]),
+            h('div', { class: 'modal-body' }, [
+                h('p', { text: 'Are you sure you want to save this collection?' }),
+                saveRequirements,
+                h('div', { class: 'footer-actions' }, [cancelBtn, confirmBtn]),
+            ]),
+        ]),
+    ]);
+    [closeBtn, cancelBtn].forEach((btn) => btn.addEventListener('click', () => modal.classList.remove('active')));
+    confirmBtn.addEventListener('click', () => {
+        if (finalSubmitMode) return submitDeliveriesWithCollection();
+        return pendingDeliveryAfterCollection ? saveCollectionThenDeliver() : save();
+    });
+    return modal;
+}
+
+
 function initMap(){
     const n=id('dcMap'),lat=Number(n?.dataset.lat),lng=Number(n?.dataset.lng); if(!n||!L||!lat||!lng)return;
     const m=L.map(n).setView([lat,lng],17); window.deliveryCollectionMap=m;
@@ -357,7 +884,13 @@ async function save(){
         next.searchParams.set('focusCustomer','1');
         next.searchParams.set('savedReference',reference);
         window.location.href=next.toString();
-    }catch(e){notice(e.message,'error');}
+    }catch(e){
+        // Saved to the offline outbox -- there's no server-assigned
+        // reference yet (that only exists once it actually syncs), so stay
+        // on the page rather than navigating with an unknown ?savedReference=.
+        if(e.offlineQueued){notice(e.message,'success');id('saveConfirmModal')?.classList.remove('active');return;}
+        notice(e.message,'error');
+    }
 }
 /** Delivery Portal flow: save the required collection, then complete the delivery that was waiting on it -- without leaving the page. */
 async function saveCollectionThenDeliver(){
@@ -370,7 +903,15 @@ async function saveCollectionThenDeliver(){
         const pending=pendingDeliveryAfterCollection;
         pendingDeliveryAfterCollection=null;
         if(pending?.button)await deliver(pending.button);
-    }catch(e){notice(e.message,'error');}
+    }catch(e){
+        if(e.offlineQueued){
+            notice(e.message,'success');
+            id('saveConfirmModal')?.classList.remove('active');
+            id('collectionRequiredModal')?.classList.remove('active');
+            return;
+        }
+        notice(e.message,'error');
+    }
 }
 async function deliver(button){
     try {
@@ -409,6 +950,14 @@ async function deliver(button){
             window.location.href = next.toString();
         }
     } catch (error) {
+        if (error.offlineQueued) {
+            // Saved to the outbox with the photo attached -- remove the row
+            // optimistically (like a normal confirmation) since there's
+            // nothing left for the rider to do here until it syncs.
+            button.closest('tr')?.remove();
+            notice(error.message, 'success');
+            return;
+        }
         button.disabled = false;
         notice(error.message, 'error');
     }
@@ -504,6 +1053,16 @@ async function checkAllInvoicesResolved() {
     const allResolved = [...rows].every((row) => row.dataset.resolved === '1');
     if (!allResolved) return;
 
+    // Nothing was actually delivered at this stop (every invoice ended up
+    // "not received" -- store closed, owner not around, refused, etc.):
+    // there is no payment to collect, so save every reason directly
+    // instead of opening the Collection modal (which would ask for a PR
+    // number and a payment that doesn't exist here).
+    if ([...pendingDeliveryResolutions.values()].every((item) => item.status === 'not_received')) {
+        await submitNotDeliveredOnly();
+        return;
+    }
+
     finalSubmitMode = true;
     collectionAccessGranted = true;
     collectionInRange = true;
@@ -531,6 +1090,61 @@ async function checkAllInvoicesResolved() {
         }
     }
     updateCollectionTotals();
+}
+
+/**
+ * Submits every staged "not received" resolution for this stop directly --
+ * no Collection modal, since nothing was delivered and there is nothing to
+ * collect. Reuses the same per-invoice not_delivered action as the
+ * non-"requires collection" flow, one call per invoice, so the server-side
+ * validation/behavior is identical either way. Each item is handled
+ * independently so one offline/failed item doesn't stop the rest -- e.g.
+ * connectivity drops mid-way, every remaining reason still gets queued.
+ */
+async function submitNotDeliveredOnly() {
+    const items = [...pendingDeliveryResolutions.entries()];
+    let anyQueued = false;
+    const failed = [];
+
+    for (const [key, item] of items) {
+        try {
+            await post('not_delivered', {
+                customer: id('selectedCustomer').value,
+                trip_id: item.tripId,
+                invoice_no: item.invoiceNo,
+                reason: item.reason,
+                latitude: item.latitude,
+                longitude: item.longitude,
+            });
+            pendingDeliveryResolutions.delete(key);
+        } catch (error) {
+            if (error.offlineQueued) {
+                anyQueued = true;
+                pendingDeliveryResolutions.delete(key);
+            } else {
+                failed.push(`${item.invoiceNo} (${error.message})`);
+            }
+        }
+    }
+
+    if (failed.length) {
+        // Leave the failed ones staged (still shown as "Unsaved" with a
+        // working "Change" button) so the rider can retry or correct them
+        // -- don't silently drop a reason that didn't actually save.
+        notice(`Couldn't save invoice(s) ${failed.join(', ')}. Tap Change on that row to retry.`, 'error');
+        return;
+    }
+
+    notice(
+        anyQueued
+            ? "You're offline. Every invoice for this stop was saved on your device and will sync automatically once you're back online."
+            : 'All invoices for this stop were recorded as not received.',
+        'success'
+    );
+    const next = new URL(window.location.href);
+    next.searchParams.delete('customer');
+    next.searchParams.set('focusCustomer', '1');
+    window.location.href = next.toString();
 }
 
 /** Final Submit for the "requires collection" flow: saves every staged delivery resolution and the collection together in one request. */
@@ -611,6 +1225,14 @@ async function submitDeliveriesWithCollection() {
         next.searchParams.set('savedReference', result.reference);
         window.location.href = next.toString();
     } catch (error) {
+        if (error.offlineQueued) {
+            // No server-assigned reference yet -- stay on the page instead
+            // of navigating with an unknown ?savedReference=.
+            id('saveConfirmModal')?.classList.remove('active');
+            id('collectionRequiredModal')?.classList.remove('active');
+            notice(error.message, 'success');
+            return;
+        }
         notice(error.message, 'error');
     }
 }
@@ -668,6 +1290,11 @@ async function notDelivered(button){
             window.location.href = next.toString();
         }
     } catch (error) {
+        if (error.offlineQueued) {
+            row?.remove();
+            notice(error.message, 'success');
+            return;
+        }
         button.disabled = false;
         notice(error.message, 'error');
     }
@@ -940,12 +1567,26 @@ document.addEventListener('DOMContentLoaded',()=>{
             focusRouteStop(link.dataset.seq);
         });
     });
+    // A stop's "Open" link is a plain page navigation online (the server
+    // needs to render Customer details + Invoices for delivery, GPS check
+    // included) -- but offline there's no server to reach, so this steps in
+    // with the IndexedDB-backed equivalent instead. Online, the click is
+    // left alone and behaves exactly as the href says.
+    document.querySelectorAll('.route-open-link').forEach((link) => {
+        link.addEventListener('click', (e) => {
+            if (!isOffline()) return;
+            e.preventDefault();
+            const code = link.dataset.customerId;
+            const name = link.closest('tr')?.querySelector('.route-focus-customer')?.firstChild?.textContent?.trim();
+            id('routeModal')?.classList.remove('active');
+            openCustomerOffline(code, name);
+        });
+    });
 
     // Deposit Slip upload (Delivery Portal route table): opens a small modal
     // scoped to one Trip + Customer stop; the button itself is only enabled
     // server-side (see delivery/portal.php) once that stop reads "Delivered"
     // and the rider is JKAS.
-    let currentDepositSlipButton = null;
     document.querySelectorAll('.deposit-slip-btn').forEach((button) => {
         button.addEventListener('click', async () => {
             currentDepositSlipButton = button;
@@ -981,20 +1622,16 @@ document.addEventListener('DOMContentLoaded',()=>{
             const result = await post('upload_deposit_slip', form);
             id('depositSlipModal')?.classList.remove('active');
             notice(result.message, 'success');
-            // Mark the triggering row's button as uploaded immediately, without a page reload.
-            if (currentDepositSlipButton) {
-                currentDepositSlipButton.classList.remove('btn-gray');
-                currentDepositSlipButton.classList.add('btn-green', 'deposit-slip-btn--uploaded');
-                currentDepositSlipButton.title = 'Deposit slip already uploaded — tap to view or replace it';
-                currentDepositSlipButton.querySelector('i')?.classList.replace('fa-receipt', 'fa-circle-check');
-                if (!currentDepositSlipButton.querySelector('.deposit-slip-uploaded-badge')) {
-                    const uploadedBadge = document.createElement('span');
-                    uploadedBadge.className = 'deposit-slip-uploaded-badge';
-                    uploadedBadge.textContent = 'Uploaded';
-                    currentDepositSlipButton.append(uploadedBadge);
-                }
-            }
+            markDepositSlipUploaded();
         } catch (error) {
+            if (error.offlineQueued) {
+                // Saved to the outbox with the photo attached -- mark it
+                // uploaded optimistically, same as a normal upload.
+                id('depositSlipModal')?.classList.remove('active');
+                notice(error.message, 'success');
+                markDepositSlipUploaded();
+                return;
+            }
             notice(error.message, 'error');
         } finally {
             button.disabled = false;

@@ -7,9 +7,9 @@
 <title>MARS MAIN SYSTEM</title>
 <link rel="stylesheet" href="<?= asset('Administrator/assets/css/fontawesome-free-7.3.1-web/css/all.min.css') ?>">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.3.1/css/all.min.css">
-<link rel="stylesheet" href="<?= asset('Administrator/assets/offline-indicator.css') ?>">
 <link rel="shortcut icon" href="Administrator/assets/images/favicon2.ico" />
-<meta name="theme-color" content="#8b1621">
+<!-- See header.php for why this is neutral instead of brand red. -->
+<meta name="theme-color" content="#ffffff">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="Administrator/assets/images/pwa-icon-apple-touch.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -116,8 +116,6 @@ function togglePass(){
 })();
 
 </script>
-<script src="<?= asset('Administrator/assets/offline-core.js') ?>" defer></script>
-<script src="<?= asset('Administrator/assets/offline-indicator.js') ?>" defer></script>
 <script src="<?= asset('Administrator/assets/pwa-install.js') ?>" defer></script>
 
 </body>

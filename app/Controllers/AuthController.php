@@ -65,31 +65,34 @@ class AuthController
     }
 
     /**
-     * Lightweight JSON endpoint used by the offline-support layer
-     * (offline-core.js) for two things:
-     *  1. A real connectivity/session check -- navigator.onLine only reflects
-     *     whether the network adapter is up, not whether the server or this
-     *     user's session is actually reachable, so the ONLINE/OFFLINE
-     *     indicator pings this instead.
-     *  2. Handing back a fresh CSRF token immediately before the queued
-     *     offline outbox is flushed, since a long-lived offline session could
-     *     span a session_regenerate_id() elsewhere.
-     * Deliberately returns only booleans/identifiers, never business data --
-     * this endpoint must stay cheap and side-effect-free since it may be
-     * polled every ~20 seconds while the app is open.
+     * Lightweight session/CSRF heartbeat used by offline-core.js:
+     *  - polled every 20s while a page is open, purely client-side, to
+     *    detect "server reachable again" without waiting for the person to
+     *    manually retry anything;
+     *  - called once before replaying the offline outbox, since a CSRF
+     *    token can go stale during a long offline stretch and every queued
+     *    write needs a fresh one to be accepted.
+     * Deliberately does NOT require a logged-in session -- the login page
+     * itself has no use for this, but a session that expired *while
+     * offline* still needs to be told "you're logged out" rather than have
+     * every ping fail outright.
      */
     public function ping(): void
     {
         requireBootstrapped();
-        header('Content-Type: application/json');
+        header('Content-Type: application/json; charset=utf-8');
 
-        $loggedIn = !empty($_SESSION['login']) && $_SESSION['login'] === '1';
+        $loggedIn = (($_SESSION['login'] ?? '') === '1') && !empty($_SESSION['userID']);
+        if ($loggedIn) {
+            // Keep the 30-minute inactivity window (see Router::dispatch())
+            // from expiring just because the person is offline reading a
+            // cached page rather than actively clicking around.
+            $_SESSION['last_activity'] = time();
+        }
 
         echo json_encode([
             'loggedIn' => $loggedIn,
-            'userID' => $loggedIn ? (string) ($_SESSION['userID'] ?? '') : null,
-            'csrfToken' => $loggedIn ? csrfToken() : null,
-            'serverTime' => date('c'),
+            'csrfToken' => csrfToken(),
         ]);
     }
 

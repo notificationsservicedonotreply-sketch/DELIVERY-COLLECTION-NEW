@@ -284,7 +284,15 @@ body {
     text-align:center;
     position:sticky;
     top:0;
-    z-index:100;
+    /* Was 100 -- so much higher than anything else on the page that once a
+       table had enough rows to actually need the sticky header while
+       scrolling, it also sat on top of every popover/tooltip/dropdown that
+       a row near the top of the visible area tried to show (status-chip
+       tooltips, the "Change" undo button, etc.), making them look stuck
+       under or blocked by the header. Only needs to beat the table's own
+       rows (z-index:auto/0), so a small value is enough, and anything that
+       must float above the header (tooltips, menus) now reliably can. */
+    z-index:2;
     white-space:nowrap;
 }
 

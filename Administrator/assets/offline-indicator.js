@@ -26,6 +26,16 @@
         return node;
     }
 
+    /** Short, readable "queued" timestamp for the sync table -- e.g.
+     *  "2:41 PM" for today, "Sep 9, 2:41 PM" otherwise. */
+    function formatQueuedAt(timestamp) {
+        if (!timestamp) return '—';
+        const date = new Date(timestamp);
+        const isToday = date.toDateString() === new Date().toDateString();
+        const time = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        return isToday ? time : date.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ', ' + time;
+    }
+
     const badge = el('button', { id: 'marsOfflineBadge', class: 'mars-offline-badge', type: 'button' });
     const dot = el('span', { class: 'mars-offline-dot' });
     const label = el('span', { class: 'mars-offline-label', text: 'Checking...' });
@@ -84,15 +94,28 @@
         }
 
         if (items.length > 0) {
-            const list = el('ul', { class: 'mars-offline-panel-list' });
+            const table = el('table', { class: 'mars-offline-sync-table' });
+            const thead = el('thead', {}, [
+                el('tr', {}, [
+                    el('th', { text: 'Item' }),
+                    el('th', { text: 'Queued' }),
+                    el('th', { text: 'Status' }),
+                    el('th', { text: 'Actions' }),
+                ]),
+            ]);
+            const tbody = el('tbody');
             items.forEach((item) => {
-                const li = el('li');
-                const desc = el('span', { class: 'mars-offline-item-desc', text: item.description || item.url });
-                li.appendChild(desc);
+                const statusCell = el('td');
+                const statusBadge = el('span', {
+                    class: 'mars-offline-status-badge ' + (item.lastError ? 'is-error' : 'is-pending'),
+                    text: item.lastError ? 'Error' : 'Pending',
+                });
+                statusCell.appendChild(statusBadge);
                 if (item.lastError) {
-                    li.appendChild(el('span', { class: 'mars-offline-item-error', text: item.lastError }));
+                    statusCell.appendChild(el('div', { class: 'mars-offline-item-error', text: item.lastError }));
                 }
-                const actions = el('div', { class: 'mars-offline-item-actions' });
+
+                const actions = el('td', { class: 'mars-offline-item-actions' });
                 const retryBtn = el('button', { type: 'button', text: 'Retry' });
                 retryBtn.addEventListener('click', async () => {
                     await window.mars.offline.retryOutboxItem(item.id);
@@ -107,10 +130,17 @@
                 });
                 actions.appendChild(retryBtn);
                 actions.appendChild(discardBtn);
-                li.appendChild(actions);
-                list.appendChild(li);
+
+                tbody.appendChild(el('tr', {}, [
+                    el('td', { class: 'mars-offline-item-desc', text: item.description || item.url }),
+                    el('td', { text: formatQueuedAt(item.createdAt) }),
+                    statusCell,
+                    actions,
+                ]));
             });
-            panel.appendChild(list);
+            table.appendChild(thead);
+            table.appendChild(tbody);
+            panel.appendChild(table);
         }
 
         const btnRow = el('div', { class: 'mars-offline-panel-actions' });

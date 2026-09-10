@@ -17,10 +17,12 @@ $scriptMap = [
     'customer-profile' => ['assets/customer-profile.js'],
     'attachment-viewer' => ['assets/attachment-viewer.js'],
 ];
-// offline-core.js must run before anything that might call
-// window.mars.offline (including offline-indicator.js right after it), and
-// before feature scripts that opt into it -- defer preserves document
-// order regardless of load order, so putting it first here is what matters.
+// Offline mode (IndexedDB data layer + the ONLINE/OFFLINE badge) loads on
+// every Administrator page, not just ones that opted into a $pageScripts
+// key -- Dashboard/Delivery-Portal/Collection-Portal/Device-Settings all
+// need it, and it's a no-op page weight-wise (two small files) for the few
+// that don't. Must load before delivery-collection.js/dashboard.js, which
+// is guaranteed here since defer scripts execute in document order.
 $toLoad = ['assets/offline-core.js', 'assets/offline-indicator.js', 'assets/jquery-3.7.1.min.js'];
 foreach ($pageScripts as $key) {
     if (isset($scriptMap[$key])) {

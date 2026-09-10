@@ -60,9 +60,9 @@
     left: 14px;
     bottom: 56px;
     z-index: 9998;
-    width: min(320px, calc(100vw - 28px));
+    width: min(420px, calc(100vw - 28px));
     max-height: min(60vh, 420px);
-    overflow-y: auto;
+    overflow: auto;
     background: #fff;
     color: #222;
     border-radius: 10px;
@@ -85,35 +85,69 @@
     margin-bottom: 8px;
 }
 
-.mars-offline-panel-list {
-    list-style: none;
+/* The "what's waiting to sync" table -- one row per queued item. Kept
+   small/compact since it lives inside a corner badge's dropdown, not a
+   full page. */
+.mars-offline-sync-table {
+    width: 100%;
+    border-collapse: collapse;
     margin: 0 0 10px;
-    padding: 0;
-    border-top: 1px solid #eee;
+    font-size: 12px;
 }
 
-.mars-offline-panel-list li {
-    padding: 8px 0;
+.mars-offline-sync-table thead th {
+    text-align: left;
+    padding: 6px 6px;
+    border-bottom: 2px solid #eee;
+    color: #666;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .02em;
+    white-space: nowrap;
+}
+
+.mars-offline-sync-table tbody td {
+    padding: 8px 6px;
     border-bottom: 1px solid #eee;
+    vertical-align: top;
 }
 
 .mars-offline-item-desc {
-    display: block;
     font-weight: 600;
     word-break: break-word;
 }
 
-.mars-offline-item-error {
-    display: block;
+.mars-offline-status-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.mars-offline-status-badge.is-pending {
+    background: #fff4e5;
+    color: #7a4a00;
+}
+
+.mars-offline-status-badge.is-error {
+    background: #fdecea;
     color: #c0392b;
-    font-size: 12px;
-    margin-top: 2px;
+}
+
+.mars-offline-item-error {
+    color: #c0392b;
+    font-size: 11px;
+    margin-top: 4px;
+    word-break: break-word;
 }
 
 .mars-offline-item-actions {
     display: flex;
-    gap: 8px;
-    margin-top: 6px;
+    flex-direction: column;
+    gap: 6px;
+    white-space: nowrap;
 }
 
 .mars-offline-item-actions button {

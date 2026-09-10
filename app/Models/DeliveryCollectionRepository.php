@@ -33,6 +33,100 @@ class DeliveryCollectionRepository
         return $this->databaseNameColumnCache[$table];
     }
 
+    /**
+     * Full offline dataset for the signed-in user's device -- everything the
+     * Delivery/Collection portals need to keep working with no connection,
+     * mirrored into IndexedDB by offline-core.js right after login (see
+     * OfflineDataController::bootstrap() / Ajax/ajax_offline_bootstrap.php).
+     *
+     *   - TripInvoice INNER JOIN TriplistAssign, and TriplistAssign alone,
+     *     are scoped by USERID -- same as assignedTrips()/
+     *     searchAssignedDeliveryCustomers().
+     *   - Customers is scoped to exactly the CustomerIDs appearing in that
+     *     TripInvoice result (i.e. "who's actually on this rider's route
+     *     today"), NOT by joining through InvoiceList/DATABASENAME. A
+     *     customer can be a valid, assigned stop with no matching
+     *     InvoiceList row (different DATABASENAME, no invoice yet, etc.),
+     *     and that customer still needs to open and work offline -- so the
+     *     rider is never required to have opened a stop online first just
+     *     to make it available offline; being on today's triplist is
+     *     enough.
+     *   - InvoiceList is still scoped by DATABASENAME (used for the
+     *     Collection modal's outstanding-invoice picker while offline).
+     *
+     * FileAttachment and the four CollectionSyntax* tables are returned
+     * empty on purpose every time: they hold records of things *created*
+     * (collections, attachments), not reference data to browse, so there is
+     * nothing to preload. They exist as IndexedDB stores purely so the
+     * rider can record a Collection while offline and have it queued
+     * locally (via the outbox) until it syncs.
+     */
+    public function offlineBootstrapData(string $userId, string $dbName): array
+    {
+        $tripInvoiceStmt = $this->pdo->prepare("
+            SELECT TI.ID, TI.TripID, TI.InvoiceNo, TI.DrNo, TI.CustomerID, TI.TotalCrtns,
+                   TI.DeliveredDate, TI.NotDeliveredReason, TI.latitude, TI.Longitude, TI.sequenceNo
+            FROM TripInvoice TI
+            INNER JOIN TriplistAssign A ON A.TRIPID = TI.TripID
+            WHERE A.USERID = :user
+            ORDER BY TI.TripID, TI.sequenceNo
+        ");
+        $tripInvoiceStmt->execute([':user' => $userId]);
+        $tripInvoice = $tripInvoiceStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $triplistStmt = $this->pdo->prepare('SELECT USERID, TRIPID, Status FROM TriplistAssign WHERE USERID = :user');
+        $triplistStmt->execute([':user' => $userId]);
+        $triplistAssign = $triplistStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $customerIds = array_values(array_unique(array_filter(array_map(
+            static fn ($row) => (string) $row['CustomerID'],
+            $tripInvoice
+        ), static fn ($id) => $id !== '')));
+
+        $customers = [];
+        if ($customerIds) {
+            $placeholders = implode(',', array_fill(0, count($customerIds), '?'));
+            $stmt = $this->pdo->prepare("
+                SELECT CustomerID, CustomerName, Street, Barangay, Municipality, Province, Latitude, Longitude, SellingType
+                FROM Customers
+                WHERE CustomerID IN ($placeholders)
+                ORDER BY CustomerName
+            ");
+            $stmt->execute($customerIds);
+            $customers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        }
+
+        $useDbFilter = $dbName !== '' && $this->hasDatabaseNameColumn('InvoiceList');
+        $invoiceSql = '
+            SELECT REFID, CUSTOMERID, INVOICEDATE, BALANCE, DEPARTMENT, DELIVERYDATE, SALESMANID, DATABASENAME
+            FROM InvoiceList'
+            . ($useDbFilter ? ' WHERE DATABASENAME = :dbname' : '');
+        $stmt = $this->pdo->prepare($invoiceSql);
+        $stmt->execute($useDbFilter ? [':dbname' => $dbName] : []);
+        $invoiceList = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        return [
+            'customers' => $customers,
+            'invoiceList' => $invoiceList,
+            'tripInvoice' => $tripInvoice,
+            'triplistAssign' => $triplistAssign,
+            'fileAttachment' => [],
+            'collectionSyntaxCategory' => [],
+            'collectionSyntaxDtl' => [],
+            'collectionSyntaxHdr' => [],
+            'collectionSyntaxInvDtl' => [],
+            // Needed client-side to replicate the same GPS proximity gate
+            // and deliveryRequiresCollection() decision the Delivery Portal
+            // enforces online -- without these the offline view would have
+            // to either guess or skip the checks entirely.
+            'settings' => [
+                'deliveryRadius' => $this->deliveryRadius(),
+                'collectionRadius' => $this->radius(),
+                'isJkasRider' => $this->isJkasRider($userId),
+            ],
+        ];
+    }
+
     /** GPS validation radius (meters) for the Collection Portal. Editable
      *  from Settings > Delivery Radius -- see SystemSettingsRepository,
      *  which this delegates to (also the source of the safe-default value

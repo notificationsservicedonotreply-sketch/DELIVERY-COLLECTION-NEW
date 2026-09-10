@@ -5,6 +5,11 @@
 
     <div class="card">
 
+        <div id="dashboardStaleNotice" class="notice info dc-hidden" style="margin-bottom:12px;">
+            <i class="fa-solid fa-wifi" aria-hidden="true"></i>
+            You're offline -- showing the numbers from your last connection.
+        </div>
+
         <div class="grid">
 
             <div class="info-boxex users">

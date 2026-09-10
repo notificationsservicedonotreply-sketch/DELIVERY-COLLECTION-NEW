@@ -72,7 +72,11 @@
             width:max-content;
             max-width:220px;
             line-height:1.35;
-            z-index:20;
+            /* Must always render above the route/invoice table's sticky
+               header (see .table thead th in dashboard.css) so hovering a
+               status chip near the top of a long, scrolled list still shows
+               the tooltip instead of it being hidden underneath the header. */
+            z-index:150;
             box-shadow:0 4px 10px rgba(0,0,0,.25);
         }
         .status-chip[data-tooltip]:hover::before,
@@ -84,7 +88,7 @@
             transform:translateX(-50%);
             border:5px solid transparent;
             border-top-color:#1f2937;
-            z-index:20;
+            z-index:150;
         }
         .deposit-slip-btn--uploaded{background:#146c43}
         .deposit-slip-uploaded-badge{margin-left:5px;padding:1px 7px;border-radius:999px;background:rgba(255,255,255,.28);font-size:10px;font-weight:800;letter-spacing:.02em;text-transform:uppercase}
@@ -148,6 +152,13 @@
             <?php endif; ?>
         </div>
     </div>
+
+    <!-- Offline customer view: filled in by JS (see renderOfflineCustomerView()
+         in delivery-collection.js) when "View customer" / a route stop's
+         "Open" link is used without a connection. Empty and hidden
+         otherwise -- the server-rendered Customer details / Invoices for
+         delivery sections further down handle the normal, online case. -->
+    <div id="offlineCustomerView" class="dc-hidden"></div>
 
     <!-- Delivery Route Modal -->
     <?php if ($route): ?>
@@ -224,7 +235,7 @@
                                 <td data-label="Address"><?= htmlspecialchars($stopAddress) ?></td>
                                 <td data-label="Status"><span class="status-pill <?= $isDone ? 'status-pill--on' : 'status-pill--off' ?>"><?= $statusLabel ?></span></td>
                                 <td data-label="Action" class="delivery-action-cell">
-                                    <a class="btn btn-blue" href="?page=Delivery-Portal&customer=<?= urlencode((string) $stop['CustomerId']) ?>"><i class="fa-solid fa-arrow-right" aria-hidden="true"></i> Open</a>
+                                    <a class="btn btn-blue route-open-link" data-customer-id="<?= htmlspecialchars((string) $stop['CustomerId'], ENT_QUOTES) ?>" href="?page=Delivery-Portal&customer=<?= urlencode((string) $stop['CustomerId']) ?>"><i class="fa-solid fa-arrow-right" aria-hidden="true"></i> Open</a>
                                     <button
                                         type="button"
                                         class="btn <?= $hasDepositSlip ? 'btn-green deposit-slip-btn--uploaded' : 'btn-gray' ?> deposit-slip-btn"
