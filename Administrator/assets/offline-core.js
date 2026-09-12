@@ -22,7 +22,12 @@
  *                                instead of throwing, so calling code can
  *                                show "saved offline, will sync" instead of
  *                                an error.
- *   getState()                - {online, checking, pendingCount, lastError}
+ *   getState()                - {online, checking, pendingCount, lastError,
+ *                                forcedOffline}
+ *   setForcedOffline(bool)    - manual override: true puts the app in
+ *                                offline mode on purpose (no network calls
+ *                                at all) even with a real connection; false
+ *                                restores real connectivity immediately
  *   onStatusChange(fn)        - subscribe to state changes
  *   flushOutbox()             - replay queued writes now (called
  *                                automatically on reconnect too)
@@ -234,6 +239,23 @@
         }
     }
 
+    // Friendly groupings of BOOTSTRAP_TABLES for progress reporting --
+    // riders don't think in table names, they think in "Customers",
+    // "Invoices", etc. Order here is also the order stores are filled in,
+    // so progress always moves forward category by category rather than
+    // jumping around.
+    const BOOTSTRAP_PROGRESS_GROUPS = [
+        { label: 'Customers', tables: ['customers'] },
+        { label: 'Invoices', tables: ['invoiceList'] },
+        { label: 'Trip assignments', tables: ['triplistAssign'] },
+        { label: 'Deliveries', tables: ['tripInvoice'] },
+        { label: 'Collections', tables: ['fileAttachment', 'collectionSyntaxCategory', 'collectionSyntaxDtl', 'collectionSyntaxHdr', 'collectionSyntaxInvDtl'] },
+    ];
+    const bootstrapProgressListeners = new Set();
+    function emitBootstrapProgress(detail) {
+        bootstrapProgressListeners.forEach((fn) => { try { fn(detail); } catch (e) { /* listener's problem, not ours */ } });
+    }
+
     /**
      * Fetches the login-scoped data bundle (Customers ⋈ InvoiceList,
      * InvoiceList, TripInvoice ⋈ TriplistAssign, TriplistAssign, plus empty
@@ -248,7 +270,7 @@
      */
     async function bootstrap(opts) {
         opts = opts || {};
-        if (!navigator.onLine && !opts.force) return false;
+        if ((!state.online) && !opts.force) return false;
 
         let response;
         try {
@@ -260,17 +282,31 @@
         const json = await response.json();
         if (!json || !json.success || !json.tables) return false;
 
-        for (const [tableKey, config] of Object.entries(BOOTSTRAP_TABLES)) {
-            const rows = json.tables[tableKey] || [];
-            await replaceStore(config.store, rows);
+        emitBootstrapProgress({ label: 'Starting…', index: 0, total: BOOTSTRAP_PROGRESS_GROUPS.length, percent: 0, done: false });
+        for (let i = 0; i < BOOTSTRAP_PROGRESS_GROUPS.length; i++) {
+            const group = BOOTSTRAP_PROGRESS_GROUPS[i];
+            for (const tableKey of group.tables) {
+                const config = BOOTSTRAP_TABLES[tableKey];
+                const rows = json.tables[tableKey] || [];
+                await replaceStore(config.store, rows);
+            }
+            emitBootstrapProgress({
+                label: group.label,
+                index: i + 1,
+                total: BOOTSTRAP_PROGRESS_GROUPS.length,
+                percent: Math.round(((i + 1) / BOOTSTRAP_PROGRESS_GROUPS.length) * 100),
+                done: false,
+            });
         }
-        // Not a table -- a handful of settings (currently just the Delivery
-        // Portal's GPS radius) the offline customer view needs to replicate
-        // the same proximity gate confirm_location enforces online. Stored
-        // in the same small key/value cache as everything else non-tabular.
+        // Not a table -- a handful of settings (GPS radii, JKAS/location-lock
+        // flags, unlocked-customer list) the offline customer view needs to
+        // replicate the same proximity/access gates the server enforces
+        // online. Stored in the same small key/value cache as everything
+        // else non-tabular.
         await cachePut('offline_settings', json.tables.settings || {});
         await cachePut('offline_bootstrap_meta', { generatedAt: json.generatedAt || Date.now() });
         lastBootstrapAt = Date.now();
+        emitBootstrapProgress({ label: 'Offline data ready', index: BOOTSTRAP_PROGRESS_GROUPS.length, total: BOOTSTRAP_PROGRESS_GROUPS.length, percent: 100, done: true });
         return true;
     }
 
@@ -296,6 +332,132 @@
     async function getIsJkasRiderOffline() {
         const cached = await cacheGet('offline_settings');
         return !!cached?.data?.isJkasRider;
+    }
+
+    /** Collection Portal's own GPS validation radius (meters), as of the
+     *  last bootstrap -- separate setting from the Delivery Portal's radius
+     *  above (see DeliveryCollectionRepository::radius() vs
+     *  deliveryRadius()). Same safe-default fallback as getDeliveryRadiusOffline(). */
+    async function getCollectionRadiusOffline() {
+        const cached = await cacheGet('offline_settings');
+        const radius = Number(cached?.data?.collectionRadius);
+        return radius > 0 ? radius : 100;
+    }
+
+    /** Signed-in user's UserList.LocationLock, as of the last bootstrap --
+     *  when false, collectionAccess() (and its offline counterpart below)
+     *  grants access with no GPS check at all, same as online. */
+    async function getLocationLockOffline() {
+        const cached = await cacheGet('offline_settings');
+        return !!cached?.data?.locationLock;
+    }
+
+    /** Whether this customer is in CustomerUnlockList, as of the last
+     *  bootstrap -- mirrors customerUnlocked(), the other override
+     *  collectionAccess() checks before falling back to a GPS distance
+     *  check. */
+    async function isCustomerUnlockedOffline(customerCode) {
+        const cached = await cacheGet('offline_settings');
+        const unlocked = cached?.data?.unlockedCustomers;
+        return Array.isArray(unlocked) && unlocked.map(String).includes(String(customerCode));
+    }
+
+    /** Haversine great-circle distance in meters -- kept local to this file
+     *  (rather than importing delivery-collection.js's identical
+     *  haversineMeters()) since offline-core.js is meant to stand alone as
+     *  the data layer, independent of which page/module happens to be
+     *  loaded alongside it. */
+    function haversineMetersOffline(lat1, lng1, lat2, lng2) {
+        const toRad = Math.PI / 180;
+        const h = Math.sin((lat2 - lat1) * toRad / 2) ** 2
+            + Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.sin((lng2 - lng1) * toRad / 2) ** 2;
+        return 2 * 6371000 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+    }
+
+    /** Offline counterpart of DeliveryCollectionRepository::collectionAccess()
+     *  -- same precedence: location lock disabled for the system, then this
+     *  customer individually unlocked, then an on-site GPS distance check
+     *  against the cached Collection Portal radius. Returned in the same
+     *  {allowed, reason, distance, override} shape the server uses so
+     *  callers don't need to branch on offline vs online. */
+    async function collectionAccessOffline(customerCode, latitude, longitude) {
+        const locationLock = await getLocationLockOffline();
+        if (!locationLock) {
+            return { allowed: true, reason: 'Location lock is disabled. You can view this customer’s collection details.', distance: null, override: 'location_lock_disabled' };
+        }
+
+        const unlocked = await isCustomerUnlockedOffline(customerCode);
+        if (unlocked) {
+            return { allowed: true, reason: 'This customer is unlocked for collection viewing.', distance: null, override: 'customer_unlocked' };
+        }
+
+        if (!Number.isFinite(Number(latitude)) || !Number.isFinite(Number(longitude))) {
+            return { allowed: false, reason: 'Salesman GPS location is required.', distance: null, override: null };
+        }
+
+        const customer = await getCustomerOffline(customerCode);
+        if (!customer || !Number.isFinite(Number(customer.Latitude)) || !Number.isFinite(Number(customer.Longitude))) {
+            return { allowed: false, reason: 'Customer coordinates are not configured.', distance: null, override: null };
+        }
+
+        const radius = await getCollectionRadiusOffline();
+        const distance = haversineMetersOffline(Number(latitude), Number(longitude), Number(customer.Latitude), Number(customer.Longitude));
+        const allowed = distance <= radius;
+        return {
+            allowed,
+            reason: allowed ? 'Salesman is within the allowed customer radius.' : 'Customer is out of range.',
+            distance,
+            override: null,
+        };
+    }
+
+    /** Offline counterpart of agingReceivables(): same Net-30-assumption
+     *  bucketing, run against the cached InvoiceList instead of a live
+     *  query. Returned in the same {items, totals} shape the server uses. */
+    async function agingReceivablesOffline(customerCode) {
+        const invoices = await getAllFromStore('invoiceList');
+        const rows = invoices.filter((row) => String(row.CUSTOMERID) === String(customerCode) && Number(row.BALANCE) > 0);
+
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const buckets = { current: 0, past30: 0, past60: 0, past90: 0, past120: 0, past150: 0 };
+        const items = [];
+        const fmt = (d) => `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}/${d.getFullYear()}`;
+
+        rows
+            .sort((a, b) => (String(a.INVOICEDATE).localeCompare(String(b.INVOICEDATE)) || String(a.REFID).localeCompare(String(b.REFID))))
+            .forEach((row) => {
+                const invoiceDate = new Date(row.INVOICEDATE);
+                const deliveryDateRaw = row.DELIVERYDATE;
+                const deliveryDate = deliveryDateRaw && String(deliveryDateRaw).trim() !== '' ? new Date(deliveryDateRaw) : null;
+                const effectiveDate = (deliveryDate && deliveryDate > invoiceDate) ? deliveryDate : invoiceDate;
+
+                const dueDate = new Date(invoiceDate);
+                dueDate.setDate(dueDate.getDate() + 30);
+                const daysPastDue = Math.floor((today - dueDate) / 86400000);
+                const balance = Number(row.BALANCE);
+
+                let bucket;
+                if (daysPastDue <= 0) bucket = 'current';
+                else if (daysPastDue <= 30) bucket = 'past30';
+                else if (daysPastDue <= 60) bucket = 'past60';
+                else if (daysPastDue <= 90) bucket = 'past90';
+                else if (daysPastDue <= 120) bucket = 'past120';
+                else bucket = 'past150';
+
+                buckets[bucket] += balance;
+                items.push({
+                    refid: String(row.REFID),
+                    date: fmt(effectiveDate),
+                    due_date: fmt(dueDate),
+                    salesman: String(row.SALESMANID || ''),
+                    balance,
+                    bucket,
+                });
+            });
+
+        const total = Object.values(buckets).reduce((sum, v) => sum + v, 0);
+        return { items, totals: { ...buckets, total } };
     }
 
     /** Mirrors deliveryRequiresCollection(): true when either the rider is
@@ -519,13 +681,36 @@
     // ------------------------------------------------------------------
     // Connectivity state
     // ------------------------------------------------------------------
+    // Manual "force offline" override -- lets a rider (or a tester) put the
+    // app into offline mode on purpose even with a perfectly good
+    // connection, so every read comes from IndexedDB and every save queues
+    // in the outbox exactly as if the network had actually dropped.
+    // Persisted per-user (same key pattern as the stale-user IndexedDB
+    // guard above) so it survives a page reload/refresh but never leaks
+    // from one account to another on a shared device.
+    const FORCE_OFFLINE_KEY = 'mars_force_offline_' + currentUserId;
+    function readForcedOffline() {
+        return localStorage.getItem(FORCE_OFFLINE_KEY) === '1';
+    }
+
     const state = {
         online: navigator.onLine,
         checking: false,
         pendingCount: 0,
         lastError: null,
         lastCheckedAt: null,
+        forcedOffline: readForcedOffline(),
     };
+    // Real network reachability, tracked separately from state.online --
+    // state.online (what every caller in the app actually checks) is the
+    // effective value: real AND not manually forced off. Kept so turning
+    // the override back off can restore the true status immediately
+    // instead of waiting for the next scheduled ping.
+    let realOnline = navigator.onLine;
+    function recomputeEffectiveOnline() {
+        state.online = !!realOnline && !state.forcedOffline;
+    }
+    recomputeEffectiveOnline();
     const listeners = new Set();
     // In-memory only (reset on page load); combined with BOOTSTRAP_REFRESH_MS
     // in checkConnectivity() below to re-run bootstrap() periodically while
@@ -548,6 +733,20 @@
     let lastCsrfToken = null;
 
     async function checkConnectivity() {
+        // Forced offline: skip the real ping entirely -- no network traffic
+        // at all while the override is on, which is the whole point of it.
+        // realOnline is left as whatever it last was, so the true state is
+        // known immediately (no false "just reconnected" bootstrap/flush)
+        // the moment the override is switched back off.
+        if (state.forcedOffline) {
+            recomputeEffectiveOnline();
+            state.checking = false;
+            state.lastCheckedAt = Date.now();
+            state.pendingCount = await outboxCount();
+            emit();
+            return state.online;
+        }
+
         state.checking = true;
         emit();
         const wasOnline = state.online;
@@ -556,11 +755,12 @@
             if (!res.ok) throw new Error('ping HTTP ' + res.status);
             const data = await res.json();
             if (data.csrfToken) lastCsrfToken = data.csrfToken;
-            state.online = true;
+            realOnline = true;
             state.lastError = data.loggedIn ? null : 'session-expired';
         } catch (e) {
-            state.online = false;
+            realOnline = false;
         }
+        recomputeEffectiveOnline();
         state.checking = false;
         state.lastCheckedAt = Date.now();
         state.pendingCount = await outboxCount();
@@ -584,13 +784,32 @@
         return state.online;
     }
 
+    /** Manual offline-mode override. Flip on and the app behaves exactly as
+     *  if the network had dropped -- reads come from IndexedDB, saves queue
+     *  in the outbox -- even with a live connection. Flip back off and it
+     *  re-checks real connectivity immediately, then (if actually online)
+     *  flushes anything that queued while forced off and refreshes the
+     *  bootstrap snapshot, the same recovery path a real reconnect gets. */
+    async function setForcedOffline(value) {
+        const forced = !!value;
+        state.forcedOffline = forced;
+        if (forced) {
+            localStorage.setItem(FORCE_OFFLINE_KEY, '1');
+        } else {
+            localStorage.removeItem(FORCE_OFFLINE_KEY);
+        }
+        recomputeEffectiveOnline();
+        emit();
+        await checkConnectivity();
+    }
+
     async function refreshPendingCount() {
         state.pendingCount = await outboxCount();
         emit();
     }
 
     window.addEventListener('online', () => checkConnectivity());
-    window.addEventListener('offline', () => { state.online = false; emit(); });
+    window.addEventListener('offline', () => { realOnline = false; recomputeEffectiveOnline(); emit(); });
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') checkConnectivity();
     });
@@ -777,9 +996,12 @@
         discardOutboxItem,
         clearAll,
         checkNow: checkConnectivity,
+        setForcedOffline,
+        isForcedOffline: () => state.forcedOffline,
         getUserId: () => currentUserId,
         bootstrap,
         getBootstrapMeta,
+        onBootstrapProgress: (fn) => { bootstrapProgressListeners.add(fn); return () => bootstrapProgressListeners.delete(fn); },
         searchCustomersOffline,
         getCustomerOffline,
         getAssignedDeliveryInvoicesOffline,
@@ -789,5 +1011,10 @@
         deliveryRequiresCollectionOffline,
         searchCollectionInvoicesOffline,
         searchCollectionInvoicesBatchOffline,
+        getCollectionRadiusOffline,
+        getLocationLockOffline,
+        isCustomerUnlockedOffline,
+        collectionAccessOffline,
+        agingReceivablesOffline,
     };
 })();

@@ -1,0 +1,122 @@
+/**
+ * Styles for the "Preparing Offline Mode" overlay shown on a rider's first
+ * post-login data sync (see offline-bootstrap-progress.js). Kept fully
+ * self-contained (own class prefix, no shared selectors) for the same
+ * reason offline-indicator.css is -- it must never be broken by, or break,
+ * any other page's styles.
+ */
+
+.mars-bootstrap-progress {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(20, 20, 20, 0.55);
+    opacity: 0;
+    transition: opacity 0.25s ease;
+    pointer-events: none;
+}
+
+.mars-bootstrap-progress.is-visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.mars-bootstrap-progress-card {
+    width: min(360px, calc(100vw - 40px));
+    background: #fff;
+    color: #222;
+    border-radius: 12px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+    padding: 22px 24px;
+    transform: translateY(8px);
+    transition: transform 0.25s ease;
+}
+
+.mars-bootstrap-progress.is-visible .mars-bootstrap-progress-card {
+    transform: translateY(0);
+}
+
+.mars-bootstrap-progress-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: #8b1621;
+    margin-bottom: 14px;
+    text-align: center;
+}
+
+.mars-bootstrap-progress-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 14px;
+}
+
+.mars-bootstrap-progress-row {
+    display: grid;
+    grid-template-columns: 108px 1fr 40px;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+}
+
+.mars-bootstrap-progress-name {
+    color: #444;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mars-bootstrap-progress-track {
+    display: block;
+    height: 8px;
+    border-radius: 999px;
+    background: #eee;
+    overflow: hidden;
+}
+
+.mars-bootstrap-progress-fill {
+    display: block;
+    height: 100%;
+    width: 0%;
+    border-radius: 999px;
+    background: #8b1621;
+    transition: width 0.4s ease;
+}
+
+.mars-bootstrap-progress-row.is-done .mars-bootstrap-progress-fill {
+    background: #2ecc71;
+}
+
+.mars-bootstrap-progress-pct {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: #666;
+    font-size: 12px;
+}
+
+.mars-bootstrap-progress-row.is-done .mars-bootstrap-progress-pct {
+    color: #1e8449;
+    font-weight: 600;
+}
+
+.mars-bootstrap-progress-status {
+    text-align: center;
+    font-size: 13px;
+    color: #666;
+    border-top: 1px solid #eee;
+    padding-top: 12px;
+}
+
+.mars-bootstrap-progress-status.is-done {
+    color: #1e8449;
+    font-weight: 700;
+}
+
+@media (max-width: 420px) {
+    .mars-bootstrap-progress-row {
+        grid-template-columns: 84px 1fr 36px;
+    }
+}

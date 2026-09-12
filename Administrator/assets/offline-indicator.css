@@ -50,9 +50,38 @@
     animation: mars-offline-pulse 1s infinite ease-in-out;
 }
 
+.mars-offline-badge.is-forced .mars-offline-dot {
+    background: #8b1621;
+    animation: none;
+}
+
 @keyframes mars-offline-pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.35; }
+}
+
+.mars-offline-toggle-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px;
+    margin-bottom: 8px;
+    border: 1px solid #eee;
+    border-radius: 8px;
+    background: #fafafa;
+    cursor: pointer;
+    font-size: 12px;
+    color: #333;
+    line-height: 1.4;
+}
+
+.mars-offline-toggle-row input[type="checkbox"] {
+    flex-shrink: 0;
+    margin-top: 2px;
+    width: 16px;
+    height: 16px;
+    accent-color: #8b1621;
+    cursor: pointer;
 }
 
 .mars-offline-panel {

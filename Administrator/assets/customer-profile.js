@@ -24,6 +24,21 @@
 
     const show = (text, type) => { message.textContent = text; message.className = `notice ${type}`; };
 
+    /** Reads the same page/count the server's 'list' action would return,
+     *  but from the customerProfile store mars.offline.bootstrap() mirrors
+     *  into IndexedDB at login -- used when the network request itself
+     *  fails (see loadPage() below), not as a first choice. Empty for
+     *  anyone without Customer-Profile access, since nothing was mirrored
+     *  for them either. */
+    async function loadPageOffline() {
+        if (!window.mars?.offline) throw Error("You're offline and offline mode isn't available in this browser.");
+        const [rows, total] = await Promise.all([
+            window.mars.offline.getCustomerProfilePageOffline(currentPage, pageSize, searchTerm),
+            window.mars.offline.getCustomerProfileCountOffline(searchTerm),
+        ]);
+        return { success: true, rows, total, page: currentPage, pageSize, offline: true };
+    }
+
     function escapeHtml(value) {
         return String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     }
@@ -102,14 +117,37 @@
         currentPage = Math.max(1, page);
         const myRequest = ++requestToken;
         tbody.innerHTML = '<tr><td colspan="7">Loading customers…</td></tr>';
+
+        const data = new FormData();
+        data.set('action', 'list');
+        data.set('csrf_token', token);
+        data.set('page', String(currentPage));
+        data.set('page_size', String(pageSize));
+        data.set('search', searchTerm);
+
+        let response;
         try {
-            const data = new FormData();
-            data.set('action', 'list');
-            data.set('csrf_token', token);
-            data.set('page', String(currentPage));
-            data.set('page_size', String(pageSize));
-            data.set('search', searchTerm);
-            const response = await fetch('../Ajax/ajax_customer_profile.php', { method: 'POST', body: data, credentials: 'same-origin' });
+            response = await fetch('../Ajax/ajax_customer_profile.php', { method: 'POST', body: data, credentials: 'same-origin' });
+        } catch (networkError) {
+            // fetch() itself threw -- a genuine connectivity failure, not
+            // the server rejecting anything -- so fall back to what was
+            // last mirrored into IndexedDB at login, same pattern
+            // delivery-collection.js uses for its own offline fallbacks.
+            if (myRequest !== requestToken) return;
+            try {
+                const result = await loadPageOffline();
+                show("You're offline — showing customers last saved to this device. Add, edit, and delete need a connection.", 'info');
+                renderRows(result.rows || []);
+                renderPagination(result.total || 0, result.page || currentPage, result.pageSize || pageSize);
+            } catch (offlineError) {
+                if (myRequest !== requestToken) return;
+                tbody.innerHTML = '<tr><td colspan="7">Could not load customers. Please try again.</td></tr>';
+                show(offlineError.message, 'error');
+            }
+            return;
+        }
+
+        try {
             const result = await response.json();
             if (myRequest !== requestToken) return; // a newer request already superseded this one
             if (!response.ok || !result.success) throw Error(result.message || 'Failed to load customers.');
@@ -160,7 +198,17 @@
     };
     async function request(action, data) {
         data.set('action', action); data.set('csrf_token', token);
-        const response = await fetch('../Ajax/ajax_customer_profile.php', { method: 'POST', body: data, credentials: 'same-origin' });
+        let response;
+        try {
+            response = await fetch('../Ajax/ajax_customer_profile.php', { method: 'POST', body: data, credentials: 'same-origin' });
+        } catch (networkError) {
+            // Adding/editing/deleting needs a live, validated round-trip
+            // (duplicate Customer ID checks, column-length checks, etc.) --
+            // unlike the list view, there's no safe way to guess at that
+            // offline, so this fails clearly instead of silently queueing
+            // something that might not actually be valid once it syncs.
+            throw Error("You're offline. Add, edit, and delete need a connection -- please try again once you're back online.");
+        }
         const result = await response.json(); if (!response.ok || !result.success) throw Error(result.message || 'Request failed.'); return result;
     }
     document.getElementById('addCustomer')?.addEventListener('click', () => open());

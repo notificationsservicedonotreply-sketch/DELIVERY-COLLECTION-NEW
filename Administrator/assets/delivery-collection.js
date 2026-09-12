@@ -75,6 +75,15 @@ async function post(action, data) {
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
     if (csrfToken) body.set('csrf_token', csrfToken);
 
+    // Covers both a genuine dropped connection AND the manual "force
+    // offline" override -- either way, no point attempting a real request
+    // that's either doomed to fail or, worse, would quietly defeat the
+    // point of forcing offline mode for a test. See handleOfflineAction()
+    // for what each action does from here (cached read vs. outbox queue).
+    if (isOffline()) {
+        return handleOfflineAction(action, body);
+    }
+
     let response;
     try {
         response = await fetch(endpoint, { method: 'POST', body, credentials: 'same-origin' });
@@ -121,6 +130,11 @@ async function handleOfflineAction(action, body) {
     if (action === 'collection_invoices_batch') {
         const invoiceNumbers = JSON.parse(body.get('invoice_numbers') || '[]');
         const result = await window.mars.offline.searchCollectionInvoicesBatchOffline(body.get('customer'), invoiceNumbers);
+        return { success: true, ...result, offline: true };
+    }
+
+    if (action === 'aging_receivables') {
+        const result = await window.mars.offline.agingReceivablesOffline(body.get('customer'));
         return { success: true, ...result, offline: true };
     }
 
@@ -197,7 +211,11 @@ function openCustomer() {
     }
 
     if (isOffline()) {
-        openCustomerOffline(selectedSearchCustomer.code, selectedSearchCustomer.name);
+        if (moduleContext().module === 'collection') {
+            openCollectionPortalOffline(selectedSearchCustomer.code, selectedSearchCustomer.name);
+        } else {
+            openCustomerOffline(selectedSearchCustomer.code, selectedSearchCustomer.name);
+        }
         return;
     }
 
@@ -527,17 +545,138 @@ async function openCustomerOffline(code, name) {
 }
 
 /**
- * Builds the Collection-required modal from scratch (it only exists in the
- * server-rendered page when a live ?customer= request determines
- * $requiresCollection -- see delivery/portal.php). Deliberately reuses the
- * exact same element ids the ONLINE page uses (paymentRows, invoiceRows,
- * prNumber, totalOutstandingInvoices, etc.), so the existing, already
- *-tested paymentRow()/manualInvoiceRow()/findInvoice()/selectedInvoices()/
- * collectionRequirements()/submitDeliveriesWithCollection() functions all
- * work against it completely unmodified -- this only has to build the
- * markup and wire the handful of buttons those functions don't already
- * self-wire (since the page's one-time DOMContentLoaded wiring ran before
- * this modal existed).
+ * Offline stand-in for the standalone Collection Portal's own
+ * "?page=Collection-Portal&customer=X" navigation: renders the same
+ * Customer details card the server would, gates "Proceed To Collection"
+ * with the same rule set collection_access enforces online (location lock
+ * disabled for the whole system / this customer individually unlocked / an
+ * on-site GPS reading within the Collection Portal's own radius -- see
+ * mars.offline.collectionAccessOffline()), then reveals the PR number /
+ * invoices / payments / summary form inline -- exactly like the online page
+ * does once collection_access succeeds. Saving goes through the same
+ * complete_collection outbox path every other offline save uses, so it
+ * queues here and syncs automatically once back online.
+ */
+async function openCollectionPortalOffline(code, name) {
+    const container = id('offlineCustomerView');
+    if (!container || !window.mars?.offline) return;
+
+    const customer = await window.mars.offline.getCustomerOffline(code);
+    if (!customer) {
+        notice(`${name || code} isn't in your cached customer list for this device yet. It'll be included the next time you sync while online (Dashboard, or "Sync now" in the offline badge).`, 'error');
+        return;
+    }
+
+    const radius = await window.mars.offline.getCollectionRadiusOffline();
+
+    id('customerResults')?.classList.add('dc-hidden');
+    id('portalMessage')?.classList.add('dc-hidden');
+    document.querySelector('.customer-search-card')?.classList.add('dc-hidden');
+
+    collectionInRange = false;
+    collectionAccessGranted = false;
+    gps = null;
+    let lastAccess = null;
+
+    const address = [customer.Street, customer.Barangay, customer.Municipality, customer.Province].filter(Boolean).join(', ');
+
+    const rangeNotice = h('div', { class: 'notice info', text: 'Checking your distance from the customer…' });
+    const proceedBtn = h('button', { type: 'button', class: 'btn btn-green dc-hidden' }, [
+        h('i', { class: 'fa-solid fa-hand-holding-dollar', 'aria-hidden': 'true' }), document.createTextNode(' Proceed To Collection'),
+    ]);
+    const backBtn = h('button', { type: 'button', class: 'btn btn-gray' }, [
+        h('i', { class: 'fa-solid fa-arrow-left', 'aria-hidden': 'true' }), document.createTextNode(' Back to search'),
+    ]);
+    backBtn.addEventListener('click', closeOfflineCustomerView);
+
+    const formSection = h('div', { class: 'dc-hidden' });
+
+    proceedBtn.addEventListener('click', () => {
+        if (!lastAccess || !lastAccess.allowed) {
+            notice('Customer is out of range.', 'error');
+            return;
+        }
+        collectionInRange = true;
+        collectionAccessGranted = true;
+        formSection.classList.remove('dc-hidden');
+        formSection.replaceChildren(buildOfflineCollectionForm());
+        proceedBtn.classList.add('dc-hidden');
+        // Same one-time setup the online page's DOMContentLoaded wiring does
+        // when #collectionDetails is present: one empty payment row, totals
+        // at zero, ready to fill in.
+        paymentRow();
+        summary();
+        updateCollectionTotals();
+        notice(lastAccess.reason, 'success');
+    });
+
+    const customerCard = h('div', { class: 'card customer-card' }, [
+        h('div', { class: 'card-title', text: 'Customer details' }),
+        h('div', { class: 'notice info', text: "You're offline — showing what was last saved to this device." }),
+        h('div', { class: 'grid' }, [
+            infoBox('Customer ID', customer.CustomerID),
+            infoBox('Customer Name', customer.CustomerName),
+            infoBox('Address', address || '—'),
+            infoBox('Latitude / Longitude', `${customer.Latitude}, ${customer.Longitude}`),
+        ]),
+        rangeNotice,
+        h('div', { class: 'footer-actions' }, [backBtn, proceedBtn]),
+    ]);
+
+    const selectedCustomerInput = h('input', { type: 'hidden', id: 'selectedCustomer', value: customer.CustomerID });
+    const moduleInput = h('input', { type: 'hidden', id: 'moduleName', value: 'collection' });
+    const invoiceBalanceInput = h('input', { type: 'hidden', id: 'invoiceBalance', value: '0' });
+
+    container.replaceChildren(selectedCustomerInput, moduleInput, invoiceBalanceInput, customerCard, formSection, buildOfflineSaveConfirmModal());
+    container.classList.remove('dc-hidden');
+
+    async function checkAccess(latitude, longitude) {
+        try {
+            lastAccess = await window.mars.offline.collectionAccessOffline(code, latitude, longitude);
+        } catch (e) {
+            lastAccess = { allowed: false, reason: e.message, distance: null };
+        }
+        const distanceText = Number.isFinite(lastAccess.distance) ? `${Math.round(lastAccess.distance)} m` : null;
+        rangeNotice.textContent = lastAccess.allowed
+            ? (distanceText ? `You're ${distanceText} from the customer — within the ${radius} m radius. ${lastAccess.reason}` : lastAccess.reason)
+            : (lastAccess.reason || (distanceText ? `You're ${distanceText} from the customer — move within ${radius} m to proceed.` : 'Waiting for GPS location.'));
+        rangeNotice.className = `notice ${lastAccess.allowed ? 'success' : 'error'}`;
+        proceedBtn.classList.toggle('dc-hidden', !lastAccess.allowed);
+    }
+
+    if (!navigator.geolocation) {
+        checkAccess(null, null);
+        return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+        (position) => {
+            gps = { latitude: position.coords.latitude, longitude: position.coords.longitude };
+            checkAccess(gps.latitude, gps.longitude);
+        },
+        () => checkAccess(null, null),
+        { enableHighAccuracy: true, timeout: 15000 }
+    );
+}
+
+/**
+ * Builds the actual PR number / invoices / payments / summary form --
+ * everything inside portal.php's #collectionDetails container, save button
+ * included (Step 5's Summary card there holds both). Shared by:
+ *  - buildOfflineCollectionModal() below, for the Delivery Portal's
+ *    "collection required before delivery" flow (form shown inside a modal)
+ *  - openCollectionPortalOffline() further down, for the standalone
+ *    Collection Portal's own offline "View customer" flow (same form shown
+ *    inline, exactly like the online page does once "Proceed to Collection"
+ *    is clicked)
+ * Deliberately reuses the exact same element ids the ONLINE page uses
+ * (paymentRows, invoiceRows, prNumber, totalOutstandingInvoices, etc.), so
+ * the existing, already-tested paymentRow()/manualInvoiceRow()/
+ * findInvoice()/selectedInvoices()/collectionRequirements()/save() all work
+ * against it completely unmodified -- this only has to build the markup and
+ * wire the handful of buttons those functions don't already self-wire
+ * (since the page's one-time DOMContentLoaded wiring ran before this
+ * existed).
  *
  * Splits (Step 4 online) are intentionally omitted -- an optional
  * accounting breakdown, not required to save a collection -- but the
@@ -545,7 +684,7 @@ async function openCustomerOffline(code, name) {
  * totalSplitBalance, summarySplit) are still present, empty, so nothing
  * throws.
  */
-function buildOfflineCollectionModal() {
+function buildOfflineCollectionForm() {
     const prNumber = h('input', { id: 'prNumber', class: 'input', required: true, placeholder: 'Enter PR number' });
 
     const invoiceSearch = h('input', { id: 'invoiceSearch', class: 'input', autocomplete: 'off', placeholder: 'Type at least 2 characters' });
@@ -568,6 +707,72 @@ function buildOfflineCollectionModal() {
     ]);
     addPaymentBtn.addEventListener('click', paymentRow);
 
+    const saveBtn = h('button', { id: 'completeTransaction', type: 'button', class: 'btn btn-green' }, [
+        h('i', { class: 'fa-solid fa-floppy-disk', 'aria-hidden': 'true' }), document.createTextNode(' Save collection'),
+    ]);
+    saveBtn.addEventListener('click', showSaveConfirmation);
+
+    return h('div', { id: 'collectionDetails' }, [
+        h('div', { class: 'card workflow-step pr-number-card', id: 'collectionStep1' }, [
+            h('div', { class: 'card-title' }, [h('span', { class: 'step-number', text: '1' }), document.createTextNode(' PR number *')]),
+            h('div', { class: 'grid' }, [h('div', { class: 'info-box' }, [prNumber])]),
+        ]),
+        h('div', { class: 'card workflow-step', id: 'collectionStep2' }, [
+            h('div', { class: 'card-title' }, [h('span', { class: 'step-number', text: '2' }), document.createTextNode(' Invoices with outstanding balance *')]),
+            h('div', { class: 'portal-actions' }, [
+                h('div', { class: 'customer-picker', style: 'position:relative;' }, [
+                    h('label', { for: 'invoiceSearch', text: 'Search invoice number *' }),
+                    invoiceSearch,
+                    invoiceResults,
+                    invoiceSearchHint,
+                ]),
+                addInvoiceBtn,
+                addManualInvoiceRowBtn,
+            ]),
+            h('div', { class: 'table-wrapper' }, [
+                h('table', { class: 'table' }, [
+                    h('thead', {}, [h('tr', {}, [h('th', {}), h('th', { text: 'Invoice' }), h('th', { text: 'Delivery date' }), h('th', { text: 'Department' }), h('th', { text: 'Balance' }), h('th', {})])]),
+                    h('tbody', { id: 'invoiceRows' }, [h('tr', {}, [h('td', { colspan: '6', text: 'Search for an invoice number.' })])]),
+                    h('tfoot', {}, [h('tr', { class: 'table-total' }, [h('td', { colspan: '5', text: 'Total selected invoices' }), h('td', { id: 'totalOutstandingInvoices', text: '0.00' })])]),
+                ]),
+            ]),
+        ]),
+        h('div', { class: 'card workflow-step', id: 'collectionStep3' }, [
+            h('div', { class: 'card-title' }, [h('span', { class: 'step-number', text: '3' }), document.createTextNode(' Collection details')]),
+            h('p', { class: 'form-help', text: 'Add at least one payment amount. For Cash, bank initial, check number, and attachment are unavailable. For PDC, all fields are available.' }),
+            h('div', { class: 'table-wrapper' }, [
+                h('table', { class: 'table' }, [
+                    h('thead', {}, [h('tr', {}, [h('th', { text: 'Payment type' }), h('th', { text: 'Bank initial' }), h('th', { text: 'Check no.' }), h('th', { text: 'Attachment' }), h('th', { text: 'Amount *' }), h('th', {})])]),
+                    paymentRows,
+                    h('tfoot', {}, [h('tr', { class: 'table-total' }, [h('td', { colspan: '4', text: 'Total collection details' }), h('td', { id: 'totalCollectionDetails', text: '0.00' }), h('td', {})])]),
+                ]),
+            ]),
+            addPaymentBtn,
+            // collectionRequirements()/summary()/updateCollectionTotals() all
+            // read these unconditionally -- kept empty/zero since Splits
+            // aren't offered offline (see docblock above).
+            h('table', { class: 'dc-hidden' }, [h('tbody', { id: 'splitRows' })]),
+            h('span', { id: 'totalSplitBalance', class: 'dc-hidden', text: '0.00' }),
+        ]),
+        h('div', { class: 'card' }, [
+            h('div', { class: 'card-title', text: 'Summary' }),
+            h('div', { class: 'grid' }, [
+                infoBoxEl('Invoice total', h('span', { id: 'summaryInvoice', text: '0.00' })),
+                infoBoxEl('Splits', h('span', { id: 'summarySplit', text: '- 0.00' })),
+                infoBoxEl('Collected', h('span', { id: 'summaryCollected', text: '- 0.00' })),
+                infoBoxEl('Balance', h('span', { id: 'summaryBalance', text: '0.00' })),
+            ]),
+            h('div', { class: 'footer-actions' }, [saveBtn]),
+        ]),
+    ]);
+}
+
+/** Wraps buildOfflineCollectionForm() in the Delivery Portal's "collection
+ *  required before delivery" modal chrome (it only exists in the
+ *  server-rendered page when a live ?customer= request determines
+ *  $requiresCollection -- see delivery/portal.php, built from scratch here
+ *  since the offline view never made that request). */
+function buildOfflineCollectionModal() {
     const closeBtn = h('button', { class: 'close-btn', id: 'closeCollectionRequired', 'aria-label': 'Close' }, [document.createTextNode('×')]);
     closeBtn.addEventListener('click', () => {
         modal.classList.remove('active');
@@ -583,67 +788,7 @@ function buildOfflineCollectionModal() {
             ]),
             h('div', { class: 'modal-body' }, [
                 h('div', { class: 'notice info', text: "You're offline — this collection will be saved on your device and synced once you're back online." }),
-                h('div', { id: 'collectionDetails' }, [
-                    h('div', { class: 'card workflow-step pr-number-card', id: 'collectionStep1' }, [
-                        h('div', { class: 'card-title' }, [h('span', { class: 'step-number', text: '1' }), document.createTextNode(' PR number *')]),
-                        h('div', { class: 'grid' }, [h('div', { class: 'info-box' }, [prNumber])]),
-                    ]),
-                    h('div', { class: 'card workflow-step', id: 'collectionStep2' }, [
-                        h('div', { class: 'card-title' }, [h('span', { class: 'step-number', text: '2' }), document.createTextNode(' Invoices with outstanding balance *')]),
-                        h('div', { class: 'portal-actions' }, [
-                            h('div', { class: 'customer-picker', style: 'position:relative;' }, [
-                                h('label', { for: 'invoiceSearch', text: 'Search invoice number *' }),
-                                invoiceSearch,
-                                invoiceResults,
-                                invoiceSearchHint,
-                            ]),
-                            addInvoiceBtn,
-                            addManualInvoiceRowBtn,
-                        ]),
-                        h('div', { class: 'table-wrapper' }, [
-                            h('table', { class: 'table' }, [
-                                h('thead', {}, [h('tr', {}, [h('th', {}), h('th', { text: 'Invoice' }), h('th', { text: 'Delivery date' }), h('th', { text: 'Department' }), h('th', { text: 'Balance' }), h('th', {})])]),
-                                h('tbody', { id: 'invoiceRows' }, [h('tr', {}, [h('td', { colspan: '6', text: 'Search for an invoice number.' })])]),
-                                h('tfoot', {}, [h('tr', { class: 'table-total' }, [h('td', { colspan: '5', text: 'Total selected invoices' }), h('td', { id: 'totalOutstandingInvoices', text: '0.00' })])]),
-                            ]),
-                        ]),
-                    ]),
-                    h('div', { class: 'card workflow-step', id: 'collectionStep3' }, [
-                        h('div', { class: 'card-title' }, [h('span', { class: 'step-number', text: '3' }), document.createTextNode(' Collection details')]),
-                        h('p', { class: 'form-help', text: 'Add at least one payment amount. For Cash, bank initial, check number, and attachment are unavailable. For PDC, all fields are available.' }),
-                        h('div', { class: 'table-wrapper' }, [
-                            h('table', { class: 'table' }, [
-                                h('thead', {}, [h('tr', {}, [h('th', { text: 'Payment type' }), h('th', { text: 'Bank initial' }), h('th', { text: 'Check no.' }), h('th', { text: 'Attachment' }), h('th', { text: 'Amount *' }), h('th', {})])]),
-                                paymentRows,
-                                h('tfoot', {}, [h('tr', { class: 'table-total' }, [h('td', { colspan: '4', text: 'Total collection details' }), h('td', { id: 'totalCollectionDetails', text: '0.00' }), h('td', {})])]),
-                            ]),
-                        ]),
-                        addPaymentBtn,
-                        // collectionRequirements()/summary()/updateCollectionTotals() all
-                        // read these unconditionally -- kept empty/zero since Splits
-                        // aren't offered offline (see docblock above).
-                        h('table', { class: 'dc-hidden' }, [h('tbody', { id: 'splitRows' })]),
-                        h('span', { id: 'totalSplitBalance', class: 'dc-hidden', text: '0.00' }),
-                    ]),
-                    h('div', { class: 'card' }, [
-                        h('div', { class: 'card-title', text: 'Summary' }),
-                        h('div', { class: 'grid' }, [
-                            infoBoxEl('Invoice total', h('span', { id: 'summaryInvoice', text: '0.00' })),
-                            infoBoxEl('Splits', h('span', { id: 'summarySplit', text: '- 0.00' })),
-                            infoBoxEl('Collected', h('span', { id: 'summaryCollected', text: '- 0.00' })),
-                            infoBoxEl('Balance', h('span', { id: 'summaryBalance', text: '0.00' })),
-                        ]),
-                    ]),
-                ]),
-                h('div', { class: 'footer-actions' }, [
-                    (() => {
-                        const btn = h('button', { id: 'completeTransaction', type: 'button', class: 'btn btn-green' }, [
-                            h('i', { class: 'fa-solid fa-floppy-disk', 'aria-hidden': 'true' }), document.createTextNode(' Save collection'),
-                        ]);
-                        btn.addEventListener('click', showSaveConfirmation);
-                        return btn;
-                    })(),
-                ]),
+                buildOfflineCollectionForm(),
             ]),
         ]),
     ]);

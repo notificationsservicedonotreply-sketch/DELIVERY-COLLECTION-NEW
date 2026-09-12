@@ -87,6 +87,7 @@ foreach ($stylesToLoad as $style):
 <link rel="stylesheet" href="<?= adminAsset('assets/delivery-collection.css') ?>">
 <link rel="stylesheet" href="<?= adminAsset('assets/red-theme.css') ?>">
 <link rel="stylesheet" href="<?= adminAsset('assets/offline-indicator.css') ?>">
+<link rel="stylesheet" href="<?= adminAsset('assets/offline-bootstrap-progress.css') ?>">
 <link rel="shortcut icon" href="assets/images/favicon2.ico" />
 </head>
 <body>

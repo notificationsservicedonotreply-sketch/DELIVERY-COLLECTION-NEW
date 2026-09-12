@@ -105,26 +105,84 @@ class DeliveryCollectionRepository
         $stmt->execute($useDbFilter ? [':dbname' => $dbName] : []);
         $invoiceList = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+        $salesman = (string) ($_SESSION['SALESMANID'] ?? $userId);
+
+        $hdrStmt = $this->pdo->prepare("
+            SELECT PRNUMBER, CUSTOMERID, SALESMAN, SYNTAXREFERENCE, DateReceived, SyntaxDate, PR_CONFIRMED
+            FROM CollectionSyntaxHdr
+            WHERE SALESMAN = :salesman
+            ORDER BY DateReceived DESC
+        ");
+        $hdrStmt->execute([':salesman' => $salesman]);
+        $collectionSyntaxHdr = $hdrStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $refIds = array_values(array_unique(array_map(
+            static fn ($row) => (string) $row['SYNTAXREFERENCE'],
+            $collectionSyntaxHdr
+        )));
+
+        $collectionSyntaxDtl = [];
+        $collectionSyntaxInvDtl = [];
+        $collectionSyntaxCategory = [];
+        if ($refIds) {
+            $placeholders = implode(',', array_fill(0, count($refIds), '?'));
+
+            $dtlStmt = $this->pdo->prepare("SELECT ID, REFID, PAYMENTTYPE, BANKINITIAL, CHECKNUMBER, ATTACH_REFID, AMOUNT FROM CollectionSyntaxDtl WHERE REFID IN ($placeholders)");
+            $dtlStmt->execute($refIds);
+            $collectionSyntaxDtl = $dtlStmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $invStmt = $this->pdo->prepare("SELECT REFID, INVOICENO, AMOUNT FROM CollectionSyntaxInvDtl WHERE REFID IN ($placeholders)");
+            $invStmt->execute($refIds);
+            $collectionSyntaxInvDtl = $invStmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $catStmt = $this->pdo->prepare("SELECT ID, REFID, CATID, AMOUNT, OTHERREF, ATTACH_REFID FROM CollectionSyntaxCategory WHERE REFID IN ($placeholders)");
+            $catStmt->execute($refIds);
+            $collectionSyntaxCategory = $catStmt->fetchAll(PDO::FETCH_ASSOC);
+        }
+
         return [
             'customers' => $customers,
             'invoiceList' => $invoiceList,
             'tripInvoice' => $tripInvoice,
             'triplistAssign' => $triplistAssign,
+            // Historical collection records for this salesman -- read-only
+            // offline mirror for the Collection Transactions list/detail
+            // pages, and the duplicate-reference check surfaced back to the
+            // rider before they even try to re-save something already
+            // synced from another device.
             'fileAttachment' => [],
-            'collectionSyntaxCategory' => [],
-            'collectionSyntaxDtl' => [],
-            'collectionSyntaxHdr' => [],
-            'collectionSyntaxInvDtl' => [],
+            'collectionSyntaxCategory' => $collectionSyntaxCategory,
+            'collectionSyntaxDtl' => $collectionSyntaxDtl,
+            'collectionSyntaxHdr' => $collectionSyntaxHdr,
+            'collectionSyntaxInvDtl' => $collectionSyntaxInvDtl,
             // Needed client-side to replicate the same GPS proximity gate
             // and deliveryRequiresCollection() decision the Delivery Portal
-            // enforces online -- without these the offline view would have
-            // to either guess or skip the checks entirely.
+            // enforces online, and the same collectionAccess() decision the
+            // standalone Collection Portal enforces online -- without these
+            // the offline view would have to either guess or skip the
+            // checks entirely.
             'settings' => [
                 'deliveryRadius' => $this->deliveryRadius(),
                 'collectionRadius' => $this->radius(),
                 'isJkasRider' => $this->isJkasRider($userId),
+                'locationLock' => $this->locationLockForUser($userId),
+                'unlockedCustomers' => $this->unlockedCustomerIds(),
             ],
         ];
+    }
+
+    /** All CustomerUnlockList customer IDs -- the offline counterpart of
+     *  customerUnlocked($code), which checks one customer at a time against
+     *  a live query. Mirrors its "table might not exist" handling. */
+    private function unlockedCustomerIds(): array
+    {
+        if ($this->unlockTableExistsCache === null) {
+            $this->unlockTableExistsCache = (bool) $this->pdo->query("SELECT OBJECT_ID(N'dbo.CustomerUnlockList', N'U')")->fetchColumn();
+        }
+        if (!$this->unlockTableExistsCache) return [];
+
+        $stmt = $this->pdo->query('SELECT CUSTOMERID FROM CustomerUnlockList');
+        return array_map('strval', $stmt->fetchAll(PDO::FETCH_COLUMN));
     }
 
     /** GPS validation radius (meters) for the Collection Portal. Editable

@@ -27,6 +27,16 @@ class OfflineDataController
             $repository = new DeliveryCollectionRepository($pdo);
             $tables = $repository->offlineBootstrapData($userId, $dbName);
 
+            // Customer Profile (admin CRUD over the full, unscoped Customers
+            // table -- see CustomerRepository) is only mirrored for users who
+            // can actually open that page. Everyone else's bootstrap payload
+            // stays exactly as before: shipping 50k+ rows to every rider's
+            // device on every login would be wasteful and pointless for
+            // riders, who never see this page.
+            $tables['customerProfile'] = hasModuleAccess('Customer-Profile')
+                ? (new CustomerRepository($pdo))->all()
+                : [];
+
             echo json_encode([
                 'success' => true,
                 'generatedAt' => time(),

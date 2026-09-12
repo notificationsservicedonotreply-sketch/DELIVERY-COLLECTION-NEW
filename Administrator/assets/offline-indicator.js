@@ -64,7 +64,10 @@
         badge.classList.toggle('is-online', !!state.online);
         badge.classList.toggle('is-offline', !state.online);
         badge.classList.toggle('is-syncing', state.online && state.pendingCount > 0);
-        if (!state.online) {
+        badge.classList.toggle('is-forced', !!state.forcedOffline);
+        if (state.forcedOffline) {
+            label.textContent = 'OFFLINE MODE';
+        } else if (!state.online) {
             label.textContent = 'OFFLINE';
         } else if (state.pendingCount > 0) {
             label.textContent = 'SYNCING (' + state.pendingCount + ')';
@@ -81,10 +84,29 @@
         const items = await window.mars.offline.getOutboxItems();
         panel.innerHTML = '';
 
+        const toggleRow = el('label', { class: 'mars-offline-toggle-row' });
+        const toggleInput = el('input', { type: 'checkbox' });
+        toggleInput.checked = state.forcedOffline;
+        toggleInput.addEventListener('change', async () => {
+            toggleInput.disabled = true;
+            await window.mars.offline.setForcedOffline(toggleInput.checked);
+            renderPanel();
+        });
+        const toggleText = el('span', {
+            text: state.forcedOffline
+                ? 'Offline mode is ON — using data saved on this device, even though you have a connection.'
+                : 'Turn on Offline mode to use only data saved on this device, even with a connection.',
+        });
+        toggleRow.appendChild(toggleInput);
+        toggleRow.appendChild(toggleText);
+        panel.appendChild(toggleRow);
+
         const statusLine = el('div', { class: 'mars-offline-panel-status' });
-        statusLine.textContent = state.online
-            ? (state.pendingCount > 0 ? state.pendingCount + ' change(s) waiting to sync.' : 'All changes are synced.')
-            : "You're offline. Changes you make will be saved and synced automatically once you're back online.";
+        statusLine.textContent = state.forcedOffline
+            ? "Offline mode is on. Changes you make will be saved and synced once it's turned back off."
+            : state.online
+                ? (state.pendingCount > 0 ? state.pendingCount + ' change(s) waiting to sync.' : 'All changes are synced.')
+                : "You're offline. Changes you make will be saved and synced automatically once you're back online.";
         panel.appendChild(statusLine);
 
         if (state.lastError === 'session-expired') {

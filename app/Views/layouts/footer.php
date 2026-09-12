@@ -23,7 +23,7 @@ $scriptMap = [
 // need it, and it's a no-op page weight-wise (two small files) for the few
 // that don't. Must load before delivery-collection.js/dashboard.js, which
 // is guaranteed here since defer scripts execute in document order.
-$toLoad = ['assets/offline-core.js', 'assets/offline-indicator.js', 'assets/jquery-3.7.1.min.js'];
+$toLoad = ['assets/offline-core.js', 'assets/offline-indicator.js', 'assets/offline-bootstrap-progress.js', 'assets/jquery-3.7.1.min.js'];
 foreach ($pageScripts as $key) {
     if (isset($scriptMap[$key])) {
         $toLoad = array_merge($toLoad, $scriptMap[$key]);

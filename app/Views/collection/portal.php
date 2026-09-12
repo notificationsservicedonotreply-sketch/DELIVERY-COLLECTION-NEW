@@ -50,6 +50,13 @@
         </div>
     </div>
 
+    <!-- Offline customer view: filled in by JS (see openCollectionPortalOffline()
+         in delivery-collection.js) when "View customer" is used without a
+         connection. Empty and hidden otherwise -- the server-rendered
+         Customer details / Collection details sections further down handle
+         the normal, online case. -->
+    <div id="offlineCustomerView" class="dc-hidden"></div>
+
     <?php if ($customer): ?>
         <!-- JavaScript Configuration -->
         <script>
